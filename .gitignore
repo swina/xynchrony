@@ -1,0 +1,32 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Generated bank data -- rebuild with `npm run sync-assets`
+# (source of truth: each bank's original --e4b/--ebl-dir/--wav-dir inputs,
+# see tools/build_bank.py). Bank JSON is cheap to regenerate; WAV assets
+# are large binary audio and don't belong in the app's own git history.
+public/wav/
+public/data/banks/*/bank.json
+public/data/banks/manifest.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
