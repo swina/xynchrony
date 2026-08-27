@@ -126,6 +126,11 @@ class MidiInputImpl {
         AudioEngine.pitchBend(value01)
         break
       }
+      case 0xD0: { // Channel Pressure (Aftertouch) -- feeds the Mod Matrix "Pressure" source
+        const [, pressure] = data
+        AudioEngine.channelPressure(pressure / 127)
+        break
+      }
       default:
         break
     }

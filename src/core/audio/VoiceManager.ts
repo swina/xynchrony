@@ -4,6 +4,9 @@
 import * as Tone from 'tone'
 import type { Preset } from './types'
 import { Voice } from './Voice'
+import { EffectChain, blankFxChain } from './effects'
+import { lfoRateToHz, lfoShapeToType } from './lfoMapping'
+import { blankLfo } from '../soundDesign/defaults'
 import type { SampleCache } from './SampleCache'
 
 const DEFAULT_POLYPHONY = 64
@@ -13,10 +16,27 @@ export class VoiceManager {
   private allVoices = new Set<Voice>()
   private activePreset: Preset | null = null
   readonly modWheelSignal: Tone.Signal<'normalRange'>
+  // Live sources added for the Manual.pdf p.156-160 catalog -- see
+  // docs/ARCHITECTURE.md. Shared across all voices (unlike Voice.ts's own
+  // per-voice gateSignal).
+  readonly pitchWheelSignal: Tone.Signal<'audioRange'>
+  readonly pressureSignal: Tone.Signal<'normalRange'>
   // Lazily-created per-CC live signals for Mod Matrix slots with a custom
   // `midiCC` set (see modMatrix.ts) -- same idea as modWheelSignal, but one
   // per referenced CC number instead of a single hardcoded CC1.
   private ccSignals = new Map<number, Tone.Signal<'normalRange'>>()
+  // Preset FX: one shared EffectChain per active preset, not one per voice
+  // -- every voice of the current preset feeds into it, so simultaneous
+  // notes share one reverb "room" instead of independent tails. See
+  // core/audio/effects.ts.
+  private fxChain: EffectChain
+  // Patch-level LFO pair (Preset.lfo1/lfo2): one shared instance per active
+  // preset, same reasoning as fxChain above -- distinct from each Layer's
+  // own per-voice lfo1/lfo2 (Voice.ts). Always running once created; only
+  // frequency/type are updated live (setPreset()/refreshPatchLfo()), never
+  // disposed/recreated on every tweak. See docs/plans/FX-Modulations.md.
+  private patchLfo1: Tone.LFO
+  private patchLfo2: Tone.LFO
 
   private bankId: string
   private sampleCache: SampleCache
@@ -24,31 +44,72 @@ export class VoiceManager {
   private audioContext: AudioContext
   private polyphonyLimit: number
   private pitchBendSemitonesValue = 0
-  // See AudioEngine.loadBank() -- true only for Sound Design-authored bank
-  // data (explicit, valid filter types set via the Filter tab), never for
-  // Orbit-3's auto-estimated values. See Voice.ts's build().
-  private filterEnabled: boolean
 
   constructor(
     bankId: string,
     sampleCache: SampleCache,
     destination: Tone.ToneAudioNode,
     audioContext: AudioContext,
-    filterEnabled = false,
     polyphonyLimit = DEFAULT_POLYPHONY,
   ) {
     this.bankId = bankId
     this.sampleCache = sampleCache
     this.destination = destination
     this.audioContext = audioContext
-    this.filterEnabled = filterEnabled
     this.polyphonyLimit = polyphonyLimit
     this.modWheelSignal = new Tone.Signal({ value: 0, units: 'normalRange' })
+    this.pitchWheelSignal = new Tone.Signal({ value: 0, units: 'audioRange' })
+    this.pressureSignal = new Tone.Signal({ value: 0, units: 'normalRange' })
+    this.fxChain = new EffectChain()
+    this.fxChain.rebuild(blankFxChain())
+    this.fxChain.output.connect(this.destination)
+    const defaultLfo = blankLfo()
+    this.patchLfo1 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape) }).start()
+    this.patchLfo2 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape) }).start()
   }
 
   setPreset(preset: Preset | null): void {
     this.panic()
     this.activePreset = preset
+    this.fxChain.rebuild(preset?.fx ?? blankFxChain())
+    this.applyPatchLfoSettings()
+  }
+
+  /** Re-reads the active preset's `fx` config and rebuilds the chain from
+   * it, without the panic()/voice-stealing that setPreset() does -- for
+   * live edits to the *same* preset's FX (Performance mode's Preset FX
+   * pane, Sound Design's FX tab) that shouldn't cut off sustained notes. */
+  refreshFx(): void {
+    this.fxChain.rebuild(this.activePreset?.fx ?? blankFxChain())
+  }
+
+  /** Re-applies the active preset's lfo1/lfo2 rate+shape onto the shared
+   * patch-level LFO instances, live, no dispose/recreate needed (frequency/
+   * type are both live-settable on a running Tone.LFO) -- see
+   * docs/plans/FX-Modulations.md. Same documented rate/shape-only scope as
+   * every layer's own LFOs (Voice.ts). */
+  refreshPatchLfo(): void {
+    this.applyPatchLfoSettings()
+  }
+
+  /** Re-applies the active preset's filter type/cutoff/resonance onto
+   * every currently-sounding voice's already-built filter node, live --
+   * see Voice.updateFilterLive() for why this doesn't need a
+   * dispose/recreate. No-op for voices built without a filter (bypassed or
+   * unconfigured at note-on time); those only pick up a filter on their
+   * next note-on. */
+  refreshFilter(): void {
+    if (!this.activePreset) return
+    for (const voice of this.allVoices) voice.updateFilterLive(this.activePreset)
+  }
+
+  private applyPatchLfoSettings(): void {
+    const lfo1 = this.activePreset?.lfo1 ?? blankLfo()
+    const lfo2 = this.activePreset?.lfo2 ?? blankLfo()
+    this.patchLfo1.frequency.value = lfoRateToHz(lfo1.rate)
+    this.patchLfo1.type = lfoShapeToType(lfo1.shape)
+    this.patchLfo2.frequency.value = lfoRateToHz(lfo2.rate)
+    this.patchLfo2.type = lfoShapeToType(lfo2.shape)
   }
 
   private heldNotes = new Set<number>()
@@ -64,12 +125,13 @@ export class VoiceManager {
   async noteOn(note: number, velocity: number): Promise<void> {
     if (velocity <= 0) return this.noteOff(note)
     if (!this.activePreset) return
+    const preset = this.activePreset // narrowed once, used across the async loop below
 
     this.heldNotes.add(note)
     const velocity01 = Math.min(1, Math.max(0, velocity / 127))
     const matches = this.collectMatchingZones(note, velocity)
     // Temporary diagnostic -- remove once silent-preset triage is done.
-    console.info(`[VoiceManager] noteOn(${note}, vel=${velocity}) preset="${this.activePreset.name}" `
+    console.info(`[VoiceManager] noteOn(${note}, vel=${velocity}) preset="${preset.name}" `
       + `-> ${matches.length} matching zone(s):`, matches.map((m) => m.zone.sampleName))
     if (matches.length === 0) return
 
@@ -81,15 +143,22 @@ export class VoiceManager {
         const voice = await Voice.create({
           bankId: this.bankId,
           layer,
+          preset,
           zone,
           note,
           velocity01,
           pitchBendSemitones: this.pitchBendSemitonesValue,
           sampleCache: this.sampleCache,
           modWheelSignal: this.modWheelSignal,
+          pitchWheelSignal: this.pitchWheelSignal,
+          pressureSignal: this.pressureSignal,
           getCCSignal: (cc: number) => this.getCCSignal(cc),
-          filterEnabled: this.filterEnabled,
-          destination: this.destination,
+          patchLfo1: this.patchLfo1,
+          patchLfo2: this.patchLfo2,
+          fxChain: this.fxChain,
+          // Every voice of the active preset feeds the shared Preset FX
+          // chain, not this.destination directly -- see the constructor.
+          destination: this.fxChain.input,
           audioContext: this.audioContext,
         })
         spawned.push(voice)
@@ -128,6 +197,17 @@ export class VoiceManager {
 
   modWheel(value01: number): void {
     this.modWheelSignal.value = Math.min(1, Math.max(0, value01))
+  }
+
+  /** value01: -1..1, matches AudioEngine.pitchBend()'s range -- this is the
+   * *live* mod-matrix source (Manual.pdf p.157's "Pitch Wheel"), separate
+   * from the static per-voice retune pitchBend() already applies. */
+  pitchWheelLive(value01: number): void {
+    this.pitchWheelSignal.value = Math.min(1, Math.max(-1, value01))
+  }
+
+  channelPressure(value01: number): void {
+    this.pressureSignal.value = Math.min(1, Math.max(0, value01))
   }
 
   getCCSignal(cc: number): Tone.Signal<'normalRange'> {

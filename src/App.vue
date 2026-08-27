@@ -2,14 +2,13 @@
 import { ref, onMounted } from 'vue'
 import { usePresetLibrary } from './composables/usePresetLibrary'
 import { useAudioEngine } from './composables/useAudioEngine'
-import { AudioEngine } from './core/audio/AudioEngine'
 import TopBar from './components/TopBar.vue'
 import PerformanceView from './components/PerformanceView.vue'
 import SoundDesignView from './components/sound-design/SoundDesignView.vue'
 import { Volume2 } from '@lucide/vue'
 
 const { currentBank, loading, error, loadManifest, loadBank } = usePresetLibrary()
-const { started, previouslyEnabled, ensureStarted, setPreset } = useAudioEngine()
+const { started, previouslyEnabled, ensureStarted } = useAudioEngine()
 
 const initError = ref<string | null>(null)
 const mode = ref<'performance' | 'soundDesign'>('performance')
@@ -19,13 +18,14 @@ onMounted(async () => {
     // loadManifest() also refreshes the user-banks list internally (see
     // usePresetLibrary.ts) -- combinedManifest lists static banks first,
     // so banks[0] here is still Orbit-3, not a user bank, as long as at
-    // least one static bank exists.
+    // least one static bank exists. This only populates currentBank/
+    // currentBankId (usePresetLibrary's own state); loading it into
+    // AudioEngine is PerformanceView.vue's job (see its onMounted), since
+    // it needs to redo that every time Performance mode is re-entered, not
+    // just once here at startup.
     const banks = await loadManifest()
     if (banks.length > 0) {
-      const bank = await loadBank(banks[0].id)
-      AudioEngine.loadBank(bank, banks[0].id)
-      const firstPreset = Object.keys(bank.presets).sort()[0]
-      if (firstPreset) setPreset(firstPreset)
+      await loadBank(banks[0].id)
     }
   } catch (e) {
     initError.value = e instanceof Error ? e.message : String(e)
@@ -51,7 +51,7 @@ async function handleStart() {
 </script>
 
 <template>
-  <main class="min-h-screen flex flex-col items-center gap-5 p-6">
+  <main class="min-h-screen flex flex-col items-center gap-5 p-1">
     <TopBar :mode="mode" @change="mode = $event" />
 
     <div v-if="initError || error" style="color: var(--color-danger)">{{ initError ?? error }}</div>

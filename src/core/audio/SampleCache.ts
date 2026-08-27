@@ -6,6 +6,20 @@
 import type { Zone } from './types'
 import { openDb, dbGet, dbPut, dbClear, STORE_WAV_SAMPLES } from '../data/db'
 
+// WAV audio physically lives only under /wav/<static-bank-id>/ (mirrored
+// there by scripts/sync-assets.mjs from each static bank's banks.config.mjs
+// entry) -- Sound Design presets (duplicated from Orbit-3 or picked via
+// SamplePickerModal, which itself only ever sources from the static bank)
+// reference those same sample files by name/wavFile, but get played back
+// under a different *logical* bankId (the live-preview scratch id, or a
+// user bank's own generated UUID). Fetching by that logical id 404s --
+// which, under Vite's dev server, silently 200s into index.html instead of
+// a real 404, so the failure only surfaces later as a decodeAudioData
+// EncodingError. Only one static bank exists today, so this is a fixed
+// constant; if a second static bank is ever added, samples will need a
+// per-zone provenance field instead (see docs/ARCHITECTURE.md).
+const STATIC_SAMPLE_SOURCE_BANK_ID = 'orbit-3'
+
 interface CachedWav {
   key: string
   bytes: ArrayBuffer
@@ -62,7 +76,7 @@ export class SampleCache {
     const inFlightHit = this.inFlight.get(key)
     if (inFlightHit) return inFlightHit
 
-    const promise = this.loadAndDecode(bankId, wavFile, key)
+    const promise = this.loadAndDecode(wavFile, key)
     this.inFlight.set(key, promise)
     try {
       return await promise
@@ -71,7 +85,7 @@ export class SampleCache {
     }
   }
 
-  private async loadAndDecode(bankId: string, wavFile: string, key: string): Promise<AudioBuffer> {
+  private async loadAndDecode(wavFile: string, key: string): Promise<AudioBuffer> {
     const db = await this.dbPromise
     let bytes: ArrayBuffer
 
@@ -79,7 +93,7 @@ export class SampleCache {
     if (cached) {
       bytes = cached.bytes
     } else {
-      const res = await fetch(`/wav/${bankId}/${encodeURIComponent(wavFile)}`)
+      const res = await fetch(`/wav/${STATIC_SAMPLE_SOURCE_BANK_ID}/${encodeURIComponent(wavFile)}`)
       if (!res.ok) throw new Error(`Failed to fetch ${wavFile}: HTTP ${res.status}`)
       bytes = await res.arrayBuffer()
       // Write-through, fire-and-forget -- don't block audio on completion.

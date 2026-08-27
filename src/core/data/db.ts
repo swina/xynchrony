@@ -1,13 +1,16 @@
 // Single shared IndexedDB database for the whole app. SampleCache uses the
 // `wav_samples` store (raw WAV bytes cache); UserBankStore uses `user_banks`
-// (user-created Sound Design banks). One shared open/upgrade path means one
-// place to bump DB_VERSION when a store is added, instead of two databases
-// racing separate upgrade transactions.
+// (user-created Sound Design banks); FxModPresetStore uses `fxmod_presets`
+// (the FX/Modulation preset library, see docs/plans/FX-Modulations.md). One
+// shared open/upgrade path means one place to bump DB_VERSION when a store
+// is added, instead of separate databases racing separate upgrade
+// transactions.
 export const DB_NAME = 'emulatorx3_db'
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export const STORE_WAV_SAMPLES = 'wav_samples'
 export const STORE_USER_BANKS = 'user_banks'
+export const STORE_FXMOD_PRESETS = 'fxmod_presets'
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -22,6 +25,9 @@ export function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_USER_BANKS)) {
         db.createObjectStore(STORE_USER_BANKS, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_FXMOD_PRESETS)) {
+        db.createObjectStore(STORE_FXMOD_PRESETS, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)

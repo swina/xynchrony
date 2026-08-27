@@ -7,6 +7,8 @@ import { useUserBanks } from '../../composables/useUserBanks'
 import { useAudioEngine } from '../../composables/useAudioEngine'
 import { AudioEngine } from '../../core/audio/AudioEngine'
 import type { Bank } from '../../core/audio/types'
+import { blankFxChain } from '../../core/audio/effects'
+import { blankLfo } from '../../core/soundDesign/defaults'
 import BankManagerPanel from './BankManagerPanel.vue'
 import PresetListPanel from './PresetListPanel.vue'
 import LayerListPanel from './LayerListPanel.vue'
@@ -14,12 +16,14 @@ import LayerParamsEditor from './LayerParamsEditor.vue'
 import ZoneListPanel from './ZoneListPanel.vue'
 import ZoneEditor from './ZoneEditor.vue'
 import FilterPanel from './FilterPanel.vue'
-import EnvelopeEditor from './EnvelopeEditor.vue'
+import EnvelopeScopeEditor from './EnvelopeScopeEditor.vue'
 import LfoEditor from './LfoEditor.vue'
 import ModMatrixEditor from './ModMatrixEditor.vue'
+import FxChainEditor from './FxChainEditor.vue'
+import ModulationEditor from './ModulationEditor.vue'
 import VirtualKeyboard from '../VirtualKeyboard.vue'
 import VoiceActivityView from '../VoiceActivityView.vue'
-import { Layers, Funnel, Activity, Sparkles, Radio, Grid3x3 } from '@lucide/vue'
+import { Layers, Funnel, Activity, Sparkles, Radio, Grid3x3, Blend, Share2 } from '@lucide/vue'
 
 const EDIT_BANK_ID = 'sound-design-scratch'
 const EDIT_PRESET_KEY = 'edit'
@@ -33,16 +37,30 @@ const selectedLayer = computed(() => {
   return activePreset.value.layers[activeLayerIndex.value] ?? null
 })
 
-type Tab = 'layers' | 'filter' | 'envelope' | 'aux' | 'lfos' | 'modmatrix'
+type Tab = 'layers' | 'filter' | 'envelope' | 'aux' | 'lfos' | 'modmatrix' | 'fx' | 'patchmod'
 const activeTab = ref<Tab>('layers')
 const TABS: Array<{ id: Tab; label: string; icon: unknown }> = [
   { id: 'layers', label: 'Layers', icon: Layers },
   { id: 'filter', label: 'Filter', icon: Funnel },
   { id: 'envelope', label: 'Envelope', icon: Activity },
-  { id: 'aux', label: 'Aux', icon: Sparkles },
+  { id: 'aux', label: 'AUX', icon: Sparkles },
   { id: 'lfos', label: 'LFOs', icon: Radio },
   { id: 'modmatrix', label: 'Mod/Matrix', icon: Grid3x3 },
+  { id: 'fx', label: 'FX', icon: Blend },
+  { id: 'patchmod', label: 'Patch Mod', icon: Share2 },
 ]
+
+// FX/patch-level Modulation are optional/lazily-seeded Preset fields (same
+// pattern as filter/filterEnv, ampEnv/auxEnv -- see core/audio/types.ts) --
+// seed blanks on open so the FX/Patch Mod tabs always have something to
+// bind to, same as FilterPanel.vue's existing pattern.
+watch(activePreset, (preset) => {
+  if (!preset) return
+  preset.fx ??= blankFxChain()
+  preset.modMatrix ??= []
+  preset.lfo1 ??= blankLfo()
+  preset.lfo2 ??= blankLfo()
+}, { immediate: true })
 
 // Debounced autosave: covers every editor added in M9/M10 (layer/zone
 // structural edits, envelope/LFO/mod-matrix parameter tweaks) without each
@@ -79,21 +97,21 @@ watch(activePreset, (preset) => {
 </script>
 
 <template>
-  <div class="flex flex-col items-center gap-4 w-full">
+  <div class="flex flex-col items-center gap-1 w-full">
     <!-- Workarea Layout Structure: left pane (bank/preset) + main panel
          (tabbed layer editors) -- see docs/plans/sound-design-ui.md. -->
-    <div class="flex flex-row gap-4 items-start w-full">
-      <div class="flex flex-col gap-4 shrink-0">
+    <div class="flex flex-row gap-2 items-start w-full">
+      <div class="flex flex-col gap-2 shrink-0">
         <BankManagerPanel />
         <PresetListPanel />
       </div>
 
-      <div v-if="activeBank && activePreset" class="flex flex-col gap-3 flex-1 min-w-0">
+      <div v-if="activeBank && activePreset" class="flex flex-col gap-1 flex-1 min-w-0">
         <div class="flex flex-wrap gap-1">
           <button
             v-for="tab in TABS"
             :key="tab.id"
-            class="sd-btn inline-flex items-center gap-1.5"
+            class="sd-btn inline-flex font-mono items-center gap-1.5"
             :class="activeTab === tab.id ? 'sd-btn-primary' : ''"
             @click="activeTab = tab.id"
           >
@@ -102,27 +120,27 @@ watch(activePreset, (preset) => {
         </div>
 
         <div class="w-full overflow-x-auto sd-scroll pb-3">
-          <div v-if="activeTab === 'layers'" class="flex flex-row gap-4 items-start">
+          <div v-if="activeTab === 'layers'" class="flex flex-row gap-2 items-start">
             <LayerListPanel />
             <LayerParamsEditor />
             <ZoneListPanel />
             <ZoneEditor />
           </div>
 
-          <FilterPanel v-else-if="activeTab === 'filter'" />
+          <FilterPanel v-else-if="activeTab === 'filter'" :preset="activePreset" />
 
           <template v-else-if="activeTab === 'envelope'">
-            <EnvelopeEditor v-if="selectedLayer" :envelope="selectedLayer.ampEnv" title="Amp Envelope" />
+            <EnvelopeScopeEditor v-if="selectedLayer && activePreset" :layer="selectedLayer" :preset="activePreset" kind="amp" title="Amp Envelope" />
             <div v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">Select a layer in the Layers tab first.</div>
           </template>
 
           <template v-else-if="activeTab === 'aux'">
-            <EnvelopeEditor v-if="selectedLayer" :envelope="selectedLayer.auxEnv" title="Aux Envelope" />
+            <EnvelopeScopeEditor v-if="selectedLayer && activePreset" :layer="selectedLayer" :preset="activePreset" kind="aux" title="Aux Envelope" />
             <div v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">Select a layer in the Layers tab first.</div>
           </template>
 
           <template v-else-if="activeTab === 'lfos'">
-            <div v-if="selectedLayer" class="flex flex-row gap-4 items-start">
+            <div v-if="selectedLayer" class="flex flex-row gap-2 items-start">
               <LfoEditor :lfo="selectedLayer.lfo1" title="LFO 1" />
               <LfoEditor :lfo="selectedLayer.lfo2" title="LFO 2" />
             </div>
@@ -133,6 +151,10 @@ watch(activePreset, (preset) => {
             <ModMatrixEditor v-if="selectedLayer" :layer="selectedLayer" />
             <div v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">Select a layer in the Layers tab first.</div>
           </template>
+
+          <FxChainEditor v-else-if="activeTab === 'fx' && activePreset?.fx" :chain="activePreset.fx" learn-scope="a" />
+
+          <ModulationEditor v-else-if="activeTab === 'patchmod' && activePreset" :preset="activePreset" />
         </div>
       </div>
     </div>

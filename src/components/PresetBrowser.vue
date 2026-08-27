@@ -48,7 +48,7 @@ const entries = computed(() => {
       <button
         v-for="[bankProg, preset] in entries"
         :key="bankProg"
-        class="sd-row w-full text-left px-3 py-2 flex items-center justify-between gap-2 transition-colors"
+        class="sd-row w-full text-xs text-left px-3 py-2 flex items-center justify-between gap-2 transition-colors"
         :class="bankProg === activeBankProg ? 'sd-row-active' : ''"
         @click="emit('select', bankProg)"
       >

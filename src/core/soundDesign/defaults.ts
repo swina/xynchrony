@@ -3,7 +3,16 @@
 // to duplicating existing data). Defaults aim for "audible and inoffensive
 // out of the box": instant attack, full sustain, a short release so
 // nothing clicks, no filter resonance, full-range key/velocity.
-import type { Layer, Zone, Envelope, AuxEnvelope, Lfo } from '../audio/types'
+import type { Layer, Zone, Envelope, AuxEnvelope, Lfo, FilterParams, LayerGroup } from '../audio/types'
+
+// Wide-open lowpass = inaudible effect until the user dials it in via the
+// Filter tab. Every Sound Design-created/duplicated preset gets this (see
+// UserBankStore.ts) rather than any filter data inherited from Orbit-3 --
+// that data is per-layer, unvalidated, and was the whole reason filter
+// playback used to be bypassed entirely (docs/ARCHITECTURE.md).
+export function blankFilter(): FilterParams {
+  return { typeRaw: 0, typeEstimated: 'lowpass', cutoffRaw: 255, cutoffHzEstimated: 20000, resonance: 0 }
+}
 
 export function blankEnvelope(): Envelope {
   return {
@@ -25,16 +34,26 @@ export function blankLfo(): Lfo {
   return { rate: 64, shape: 'sine', delay: 0, variation: 0, sync: 'freeRun' }
 }
 
+// New group starts as a copy of blankEnvelope()/blankAuxEnvelope(), not
+// linked to any layer's existing envelope data -- joining it is an
+// explicit per-layer choice (EnvelopeScopeEditor.vue), never automatic.
+export function blankLayerGroup(name: string): LayerGroup {
+  return {
+    id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `group-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name,
+    ampEnv: blankEnvelope(),
+    auxEnv: blankAuxEnvelope(),
+  }
+}
+
 export function blankLayer(layerIndex: number): Layer {
   return {
     layerIndex,
     params: {
       delayMs: 0, transposeSemitones: 0, fineTuneCents: 0, nonTranspose: false,
       volumeDb: 0, pan: 0,
-      filter: { typeRaw: 0, typeEstimated: 'lowpass', cutoffRaw: 255, cutoffHzEstimated: 20000, resonance: 0 },
     },
     ampEnv: blankEnvelope(),
-    filterEnv: blankEnvelope(),
     auxEnv: blankAuxEnvelope(),
     lfo1: blankLfo(),
     lfo2: blankLfo(),

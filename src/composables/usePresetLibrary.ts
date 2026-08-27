@@ -7,12 +7,22 @@
 import { ref, shallowRef, computed } from 'vue'
 import type { Bank, BankManifest, BankManifestEntry } from '../core/audio/types'
 import { useUserBanks } from './useUserBanks'
+import { UserBankStore } from '../core/data/UserBankStore'
+
+const bankStore = new UserBankStore()
 
 const manifest = ref<BankManifestEntry[]>([])
 const currentBank = shallowRef<Bank | null>(null)
 const currentBankId = ref<string | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+// Last preset explicitly picked in Performance mode, so PerformanceView can
+// restore it when re-mounted after a trip through Sound Design mode --
+// AudioEngine's loaded bank/preset is a single global slot that Sound
+// Design's live-preview watcher overwrites while active (see
+// SoundDesignView.vue), so Performance needs to reassert its own state
+// every time it (re)mounts, not just once at app startup.
+const lastPerformancePresetKey = ref<string | null>(null)
 
 const { banks: userBanks, refresh: refreshUserBanks } = useUserBanks()
 
@@ -68,6 +78,28 @@ async function loadBank(bankId: string): Promise<Bank> {
   }
 }
 
+/** Whether the currently loaded bank can be saved back to IndexedDB --
+ * false for static banks (Orbit-3), which have nowhere to persist to. See
+ * docs/plans/FX-Modulations.md's Decision 2 / "Persistence" -- gates
+ * Performance mode's explicit Save button. */
+const isCurrentBankSaveable = computed(() => combinedManifest.value.find((b) => b.id === currentBankId.value)?.source === 'user')
+
+/** Persists the currently loaded bank (Performance mode's own selection --
+ * distinct from Sound Design's `activeBank` in useUserBanks.ts, which can
+ * be a different bank entirely) back to IndexedDB. No-op if nothing's
+ * loaded or the loaded bank isn't a user bank -- callers should still gate
+ * the UI on `isCurrentBankSaveable` (disabling the action is clearer than
+ * a silent no-op). See docs/plans/FX-Modulations.md's Decision 2 -- this is
+ * the explicit "Save (patch)" action, Performance mode never autosaves. */
+async function persistCurrentBank(): Promise<void> {
+  if (!currentBank.value || !currentBankId.value || !isCurrentBankSaveable.value) return
+  await bankStore.save(currentBankId.value, currentBank.value)
+}
+
 export function usePresetLibrary() {
-  return { manifest: combinedManifest, currentBank, currentBankId, loading, error, loadManifest, loadBank }
+  return {
+    manifest: combinedManifest, currentBank, currentBankId, loading, error,
+    lastPerformancePresetKey, loadManifest, loadBank,
+    isCurrentBankSaveable, persistCurrentBank,
+  }
 }

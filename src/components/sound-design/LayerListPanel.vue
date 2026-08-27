@@ -6,6 +6,7 @@
 import { computed } from 'vue'
 import { useUserBanks } from '../../composables/useUserBanks'
 import { blankLayer } from '../../core/soundDesign/defaults'
+import { deepClonePlain } from '../../utils/deepClone'
 import { Plus, ChevronUp, ChevronDown, Copy, X } from '@lucide/vue'
 
 const { activePreset, activeLayerIndex } = useUserBanks()
@@ -24,7 +25,7 @@ function handleAdd() {
 
 function handleDuplicate(index: number) {
   if (!activePreset.value) return
-  const clone = structuredClone(activePreset.value.layers[index])
+  const clone = deepClonePlain(activePreset.value.layers[index])
   activePreset.value.layers.splice(index + 1, 0, clone)
   renumber()
   activeLayerIndex.value = index + 1

@@ -5,6 +5,8 @@
 // built-in Orbit-3 bank, with no format translation needed.
 import { toRaw } from 'vue'
 import { openDb, dbGet, dbGetAll, dbPut, dbDelete, STORE_USER_BANKS } from './db'
+import { blankFilter, blankEnvelope } from '../soundDesign/defaults'
+import { deepClonePlain } from '../../utils/deepClone'
 import type { Bank, Preset } from '../audio/types'
 
 export interface UserBankRecord {
@@ -126,11 +128,31 @@ export class UserBankStore {
 
   /** Deep-clones `sourcePreset` (from Orbit-3 or another user bank) into
    * `id`'s bank at the next available Bank:Prog key. The core "use the
-   * current bank as a starting point" primitive for Sound Design. */
+   * current bank as a starting point" primitive for Sound Design.
+   *
+   * `filter`/`filterEnv` are seeded with a safe, wide-open default only
+   * when the clone doesn't already have them -- true for every Orbit-3
+   * source preset (that data doesn't have preset-level filter fields at
+   * all, only unvalidated per-layer ones Voice.ts no longer reads).
+   * `filterBypassed` also defaults to `true` (filter OFF) for the same
+   * reason: even a "wide open" filter is not acoustically transparent --
+   * a real 2-pole lowpass at any cutoff still rolls off ultra-high content,
+   * which is enough to audibly rebalance a multi-layer patch (confirmed:
+   * a duplicated `hit:Intruder` had a masked pure-sine layer become
+   * audible as soon as filtering engaged, even at cutoff=20kHz/Q=0.707 --
+   * see docs/ARCHITECTURE.md). So filtering is opt-in, not
+   * active-but-nominally-transparent: a fresh duplicate sounds identical
+   * to Performance mode until the user deliberately enables it via the
+   * Filter tab. A source that's itself a Sound Design preset already has
+   * valid, user-chosen filter/filterEnv/filterBypassed, which the clone
+   * keeps as-is. */
   async duplicatePresetInto(id: string, sourcePreset: Preset): Promise<string> {
     const record = await this.load(id)
     if (!record) throw new Error(`User bank ${id} not found`)
-    const cloned: Preset = structuredClone(sourcePreset)
+    const cloned: Preset = deepClonePlain(sourcePreset)
+    cloned.filter ??= blankFilter()
+    cloned.filterEnv ??= blankEnvelope()
+    cloned.filterBypassed ??= true
     const key = nextBankProg(record.bank)
     record.bank.presets[key] = cloned
     await this.save(id, record.bank)
@@ -144,7 +166,10 @@ export class UserBankStore {
     const record = await this.load(id)
     if (!record) throw new Error(`User bank ${id} not found`)
     const key = nextBankProg(record.bank)
-    record.bank.presets[key] = { name, category: null, layers: [] }
+    record.bank.presets[key] = {
+      name, category: null, layers: [],
+      filter: blankFilter(), filterEnv: blankEnvelope(), filterBypassed: true,
+    }
     await this.save(id, record.bank)
     return key
   }

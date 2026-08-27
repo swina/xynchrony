@@ -3,6 +3,7 @@
 import * as Tone from 'tone'
 import { VoiceManager } from './VoiceManager'
 import { SampleCache } from './SampleCache'
+import { EffectChain, blankFxChain, type FxChain } from './effects'
 import type { Bank, Preset } from './types'
 
 class AudioEngineImpl {
@@ -10,23 +11,44 @@ class AudioEngineImpl {
   private meter: Tone.Meter | null = null
   private sampleCache: SampleCache | null = null
   private voiceManager: VoiceManager | null = null
+  // Global/Aux FX: one chain on the master bus, independent of whichever
+  // preset is loaded -- see core/audio/effects.ts and docs/ARCHITECTURE.md.
+  // Real Emulator X3's Aux FX applies across all 64 MIDI channels
+  // (Manual.pdf p.231-235); this app only ever plays one preset at a time,
+  // so "applies globally" maps onto "one always-on chain on the master
+  // bus" rather than any per-channel concept this app doesn't have.
+  private globalFxChain: EffectChain | null = null
   private started = false
 
   private bank: Bank | null = null
   private bankId: string | null = null
   private activeBankProg: string | null = null
-  private filterEnabled = false
 
   /** Must be called from a user-gesture handler (click/keydown) -- browsers
    * block AudioContext until one occurs. */
   async start(): Promise<void> {
     if (this.started) return
     await Tone.start()
-    this.masterGain = new Tone.Gain(0.8).toDestination()
+    // masterGain -> globalFxChain -> destination; meter taps the FX
+    // chain's output so the VU meter reflects final audible output, not
+    // pre-FX signal.
+    this.masterGain = new Tone.Gain(0.8)
+    this.globalFxChain = new EffectChain()
+    this.globalFxChain.rebuild(blankFxChain())
+    this.masterGain.connect(this.globalFxChain.input)
+    this.globalFxChain.output.toDestination()
     this.meter = new Tone.Meter({ normalRange: true })
-    this.masterGain.connect(this.meter)
+    this.globalFxChain.output.connect(this.meter)
     this.sampleCache = new SampleCache(Tone.getContext().rawContext as unknown as AudioContext)
     this.started = true
+  }
+
+  /** Rebuilds the Global/Aux FX chain from `config` -- see
+   * useGlobalFx.ts, which calls this whenever its persisted config
+   * changes. No-op before start() (nothing to rebuild yet; useGlobalFx
+   * re-applies once started). */
+  setGlobalFx(config: FxChain): void {
+    this.globalFxChain?.rebuild(config)
   }
 
   get isStarted(): boolean {
@@ -51,18 +73,12 @@ class AudioEngineImpl {
     this.bank = bank
     this.bankId = bankId
     this.activeBankProg = null
-    // Filter playback is only safe for bank data whose filter type/cutoff
-    // were set explicitly (Sound Design's Filter tab -> real
-    // BiquadFilterNode types), not auto-estimated from unvalidated raw
-    // bytes (Orbit-3 and anything else) -- see Voice.ts / docs/ARCHITECTURE.md.
-    this.filterEnabled = bank._meta.source === 'user-created' || bank._meta.source === 'sound-design-live-preview'
     if (this.started) {
       this.voiceManager = new VoiceManager(
         bankId,
         this.sampleCache!,
         this.masterGain!,
         Tone.getContext().rawContext as unknown as AudioContext,
-        this.filterEnabled,
       )
     }
   }
@@ -86,7 +102,6 @@ class AudioEngineImpl {
         this.sampleCache!,
         this.masterGain!,
         Tone.getContext().rawContext as unknown as AudioContext,
-        this.filterEnabled,
       )
       if (this.currentPreset) this.voiceManager.setPreset(this.currentPreset)
     }
@@ -103,6 +118,20 @@ class AudioEngineImpl {
     if (!preset) throw new Error(`Preset ${bankProg} not found in loaded bank`)
     this.activeBankProg = bankProg
     this.tryGetVoiceManager()?.setPreset(preset)
+  }
+
+  /** Re-applies the active preset's `fx`, patch-level `lfo1`/`lfo2`, and
+   * `filter`/`filterEnv`/`filterBypassed` onto the running audio graph,
+   * without stopping held notes -- see useAudioEngine.ts, which calls this
+   * whenever the current preset is edited live (Sound Design's FX/
+   * Modulation/Filter tabs, Performance mode's FX/Modulation/Filter panes).
+   * `preset.modMatrix`/layer `modMatrix` routing changes need no equivalent
+   * call -- they're read fresh at each note-on (Voice.ts), same as they
+   * always have been. */
+  refreshPresetLive(): void {
+    this.voiceManager?.refreshFx()
+    this.voiceManager?.refreshPatchLfo()
+    this.voiceManager?.refreshFilter()
   }
 
   get currentPreset(): Preset | null {
@@ -129,10 +158,17 @@ class AudioEngineImpl {
 
   pitchBend(value01: number): void {
     this.voiceManager?.pitchBend(2, value01)
+    // Also feeds the live Mod Matrix "Pitch Wheel" source -- separate from
+    // the static per-voice retune above (Manual.pdf p.157).
+    this.voiceManager?.pitchWheelLive(value01)
   }
 
   modWheel(value01: number): void {
     this.voiceManager?.modWheel(value01)
+  }
+
+  channelPressure(value01: number): void {
+    this.voiceManager?.channelPressure(value01)
   }
 
   controlChange(cc: number, value01: number): void {

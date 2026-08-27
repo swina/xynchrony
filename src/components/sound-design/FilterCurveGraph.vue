@@ -1,10 +1,13 @@
 <script setup lang="ts">
 // Draggable frequency-response graph for the filter's Cutoff/Resonance,
-// same "shape by eye" idea as EnvelopeDesigner.vue's envelope graph --
-// drag the single point to set cutoff (x, log-frequency) and resonance
-// (y, 0-127) together; the curve behind it is a stylized response shape
-// per filter type, purely visual feedback (filter playback is currently
-// bypassed -- see docs/ARCHITECTURE.md). Mutates `filter`'s fields
+// same "shape by eye" idea as EnvelopeDesigner.vue's envelope graph. Cutoff
+// and Resonance are two SEPARATE draggable handles (a horizontal scrubber
+// under the curve for Cutoff, a vertical slider beside it for Resonance) --
+// a single combined XY point made it impossible to change one without
+// nudging the other, which made isolating "is it the cutoff or the
+// resonance" impossible while diagnosing a lowpass self-resonance issue.
+// The curve itself still reflects both together, purely visual feedback
+// (a stylized response shape per filter type). Mutates `filter`'s fields
 // directly, same direct-prop-mutation pattern as EnvelopeDesigner.vue.
 import { ref, computed } from 'vue'
 import type { FilterParams } from '../../core/audio/types'
@@ -14,6 +17,7 @@ const props = defineProps<{ filter: FilterParams }>()
 const GRAPH_W = 480
 const GRAPH_H = 160
 const PAD = 14
+const RES_W = 56 // separate vertical Resonance slider, to the right of the curve
 
 const MIN_HZ = 20
 const MAX_HZ = 20000
@@ -84,7 +88,7 @@ function levelAt(x: number, type: string, cutoffX: number, resonance: number): n
 
 const SAMPLES = 96
 const cutoffX = computed(() => freqToX(props.filter.cutoffHzEstimated))
-const handleY = computed(() => levelToY(props.filter.resonance))
+const resonanceY = computed(() => levelToY(props.filter.resonance))
 
 const points = computed(() => {
   const pts: Array<{ x: number; y: number }> = []
@@ -101,12 +105,12 @@ const areaD = computed(() => `${pathD.value} L${GRAPH_W - PAD},${GRAPH_H - PAD} 
 
 const fmtHz = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}Hz`)
 
-const svgEl = ref<SVGSVGElement | null>(null)
-const dragging = ref(false)
-const hover = ref(false)
+// --- Cutoff handle: horizontal-only scrubber under the curve ---
+const curveSvgEl = ref<SVGSVGElement | null>(null)
+const draggingCutoff = ref(false)
+const hoverCutoff = ref(false)
 
-function localPoint(e: PointerEvent): { x: number; y: number } | null {
-  const svg = svgEl.value
+function localPoint(svg: SVGSVGElement | null, e: PointerEvent): { x: number; y: number } | null {
   if (!svg) return null
   const ctm = svg.getScreenCTM()
   if (!ctm) return null
@@ -117,63 +121,123 @@ function localPoint(e: PointerEvent): { x: number; y: number } | null {
   return { x: loc.x, y: loc.y }
 }
 
-function applyDrag(e: PointerEvent) {
-  const loc = localPoint(e)
+function onCutoffPointerDown(e: PointerEvent) {
+  draggingCutoff.value = true
+  ;(e.currentTarget as SVGElement).setPointerCapture(e.pointerId)
+  applyCutoffDrag(e)
+}
+function onCutoffPointerMove(e: PointerEvent) {
+  if (!draggingCutoff.value) return
+  applyCutoffDrag(e)
+}
+function onCutoffPointerUp() {
+  draggingCutoff.value = false
+}
+function applyCutoffDrag(e: PointerEvent) {
+  const loc = localPoint(curveSvgEl.value, e)
   if (!loc) return
-  props.filter.cutoffHzEstimated = xToFreq(loc.x)
-  props.filter.resonance = yToLevel(loc.y)
+  props.filter.cutoffHzEstimated = xToFreq(loc.x) // y ignored -- resonance is untouched by this handle
 }
 
-function onPointerDown(e: PointerEvent) {
-  dragging.value = true
+// --- Resonance handle: separate vertical slider, vertical-only ---
+const resSvgEl = ref<SVGSVGElement | null>(null)
+const draggingRes = ref(false)
+const hoverRes = ref(false)
+
+function onResPointerDown(e: PointerEvent) {
+  draggingRes.value = true
   ;(e.currentTarget as SVGElement).setPointerCapture(e.pointerId)
-  applyDrag(e)
+  applyResDrag(e)
 }
-function onPointerMove(e: PointerEvent) {
-  if (!dragging.value) return
-  applyDrag(e)
+function onResPointerMove(e: PointerEvent) {
+  if (!draggingRes.value) return
+  applyResDrag(e)
 }
-function onPointerUp() {
-  dragging.value = false
+function onResPointerUp() {
+  draggingRes.value = false
+}
+function applyResDrag(e: PointerEvent) {
+  const loc = localPoint(resSvgEl.value, e)
+  if (!loc) return
+  props.filter.resonance = yToLevel(loc.y) // x ignored -- cutoff is untouched by this handle
 }
 </script>
 
 <template>
-  <div class="w-full overflow-x-auto sd-scroll">
-    <svg
-      ref="svgEl"
-      :viewBox="`0 0 ${GRAPH_W} ${GRAPH_H}`"
-      :width="GRAPH_W"
-      :height="GRAPH_H"
-      style="min-width: 100%"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointerleave="onPointerUp"
-    >
-      <line :x1="PAD" :x2="GRAPH_W - PAD" :y1="GRAPH_H - PAD" :y2="GRAPH_H - PAD" stroke="var(--color-mocha)" stroke-width="1" />
-
-      <path :d="areaD" fill="var(--color-primary)" fill-opacity="0.14" stroke="none" />
-      <path :d="pathD" fill="none" stroke="var(--color-primary)" stroke-width="2.25" stroke-linejoin="round" />
-
-      <g
-        style="cursor: pointer; touch-action: none"
-        @pointerdown="onPointerDown"
-        @pointerenter="hover = true"
-        @pointerleave="hover = false"
+  <div class="flex gap-2 items-stretch">
+    <div class="flex-1 min-w-0">
+      <svg
+        ref="curveSvgEl"
+        :viewBox="`0 0 ${GRAPH_W} ${GRAPH_H}`"
+        style="width: 100%; height: auto; display: block"
+        @pointermove="onCutoffPointerMove"
+        @pointerup="onCutoffPointerUp"
+        @pointerleave="onCutoffPointerUp"
       >
-        <circle :cx="cutoffX" :cy="handleY" r="12" fill="transparent" />
-        <line :x1="cutoffX" :x2="cutoffX" :y1="handleY" :y2="GRAPH_H - PAD" stroke="var(--color-ink-soft)" stroke-width="1" stroke-dasharray="3,3" />
+        <line :x1="PAD" :x2="GRAPH_W - PAD" :y1="GRAPH_H - PAD" :y2="GRAPH_H - PAD" stroke="var(--color-mocha)" stroke-width="1" />
+
+        <path :d="areaD" fill="var(--color-primary)" fill-opacity="0.14" stroke="none" />
+        <path :d="pathD" fill="none" stroke="var(--color-primary)" stroke-width="2.25" stroke-linejoin="round" />
+
+        <!-- Cutoff: horizontal-only scrubber on the frequency axis baseline -->
+        <line :x1="cutoffX" :x2="cutoffX" :y1="PAD" :y2="GRAPH_H - PAD" stroke="var(--color-ink-soft)" stroke-width="1" stroke-dasharray="3,3" />
+        <g
+          style="cursor: ew-resize; touch-action: none"
+          @pointerdown="onCutoffPointerDown"
+          @pointerenter="hoverCutoff = true"
+          @pointerleave="hoverCutoff = false"
+        >
+          <rect :x="cutoffX - 10" :y="GRAPH_H - PAD - 10" width="20" height="20" fill="transparent" />
+          <circle
+            :cx="cutoffX" :cy="GRAPH_H - PAD"
+            :r="draggingCutoff || hoverCutoff ? 7 : 5.5"
+            :fill="draggingCutoff ? 'var(--color-skyblue)' : 'var(--color-cream)'"
+            stroke="var(--color-primary)"
+            stroke-width="2"
+          />
+          <text :x="cutoffX" :y="PAD - 4" text-anchor="middle" font-size="9" fill="var(--color-ink-soft)">
+            Cutoff {{ fmtHz(filter.cutoffHzEstimated) }}
+          </text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- Resonance: separate vertical-only slider, doesn't touch cutoff -->
+    <svg
+      ref="resSvgEl"
+      :viewBox="`0 0 ${RES_W} ${GRAPH_H}`"
+      :width="RES_W"
+      :height="GRAPH_H"
+      class="shrink-0"
+      @pointermove="onResPointerMove"
+      @pointerup="onResPointerUp"
+      @pointerleave="onResPointerUp"
+    >
+      <line :x1="RES_W / 2" :x2="RES_W / 2" :y1="PAD" :y2="GRAPH_H - PAD" stroke="var(--color-mocha)" stroke-width="2" />
+      <rect
+        :x="RES_W / 2 - 3" :y="resonanceY"
+        width="6" :height="GRAPH_H - PAD - resonanceY"
+        fill="var(--color-primary)" fill-opacity="0.25"
+      />
+      <text :x="RES_W / 2" :y="PAD - 4" text-anchor="middle" font-size="8" fill="var(--color-ink-soft)">Res</text>
+      <g
+        style="cursor: ns-resize; touch-action: none"
+        @pointerdown="onResPointerDown"
+        @pointerenter="hoverRes = true"
+        @pointerleave="hoverRes = false"
+      >
+        <rect :x="RES_W / 2 - 10" :y="resonanceY - 10" width="20" height="20" fill="transparent" />
         <circle
-          :cx="cutoffX" :cy="handleY"
-          :r="dragging || hover ? 7 : 5.5"
-          :fill="dragging ? 'var(--color-skyblue)' : 'var(--color-cream)'"
+          :cx="RES_W / 2" :cy="resonanceY"
+          :r="draggingRes || hoverRes ? 7 : 5.5"
+          :fill="draggingRes ? 'var(--color-skyblue)' : 'var(--color-cream)'"
           stroke="var(--color-primary)"
           stroke-width="2"
         />
-        <text :x="cutoffX" :y="handleY - 12" text-anchor="middle" font-size="9" fill="var(--color-ink-soft)">
-          {{ fmtHz(filter.cutoffHzEstimated) }} &middot; Q{{ Math.round(filter.resonance) }}
-        </text>
       </g>
+      <text :x="RES_W / 2" :y="GRAPH_H - 2" text-anchor="middle" font-size="9" fill="var(--color-ink-soft)">
+        {{ Math.round(filter.resonance) }}
+      </text>
     </svg>
   </div>
 </template>
