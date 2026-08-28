@@ -66,7 +66,7 @@ onUnmounted(() => window.removeEventListener('mouseup', releaseAllLocal))
     </div>
 
     <div
-      class="relative flex h-32 select-none"
+      class="relative flex h-20 select-none"
       @touchend.prevent="releaseAllLocal"
       style="touch-action: none"
     >
@@ -90,7 +90,7 @@ onUnmounted(() => window.removeEventListener('mouseup', releaseAllLocal))
           <div v-if="!isBlackKey(note)" class="relative w-8 h-full">
             <button
               v-if="isBlackKey(note + 1) && notes.includes(note + 1)"
-              class="absolute left-[22px] top-0 w-5 h-20 rounded-b-md z-10 pointer-events-auto"
+              class="absolute left-[22px] top-0 w-5 h-12 rounded-b-md z-10 pointer-events-auto"
               :style="{ backgroundColor: isHeld(note + 1) ? 'var(--color-primary)' : 'var(--color-ink)' }"
               @mousedown="press(note + 1)"
               @mouseup="releaseNote(note + 1)"

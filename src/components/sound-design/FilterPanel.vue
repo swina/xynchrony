@@ -33,6 +33,7 @@ import type { Preset } from '../../core/audio/types'
 import Dial from './Dial.vue'
 import EnvelopeEditor from './EnvelopeEditor.vue'
 import FilterCurveGraph from './FilterCurveGraph.vue'
+import ToggleButton from './ToggleButton.vue'
 import { SlidersHorizontal } from '@lucide/vue'
 
 const props = defineProps<{ preset: Preset | null }>()
@@ -49,7 +50,7 @@ watch(() => props.preset, (preset) => {
   if (!preset) return
   preset.filter ??= blankFilter()
   preset.filterEnv ??= blankEnvelope()
-  preset.filterBypassed ??= true
+  preset.filterBypassed ??= false
 }, { immediate: true })
 
 const FILTER_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch', 'allpass', 'lowshelf', 'highshelf', 'peaking']
@@ -62,7 +63,7 @@ const showDials = ref(false)
 
 <template>
   <div v-if="preset && preset.filter && preset.filterEnv" class="flex flex-row flex-wrap gap-2 items-start">
-    <div class="sd-panel flex flex-col gap-3 w-[30rem] shrink-0">
+    <div class="sd-node flex flex-col gap-3 w-[30rem] shrink-0">
       <div class="flex items-center justify-between">
         <h3 class="sd-panel-title">Filter (whole patch)</h3>
         <button class="sd-btn sd-btn-icon" :title="showDials ? 'Hide dials' : 'Show dials'" @click="showDials = !showDials">
@@ -70,10 +71,10 @@ const showDials = ref(false)
         </button>
       </div>
       <div class="flex flex-wrap gap-4 items-center">
-        <label class="flex items-center gap-2 text-xs">
-          <input :checked="!preset.filterBypassed" type="checkbox" @change="preset.filterBypassed = !($event.target as HTMLInputElement).checked" />
-          Enable filter
-        </label>
+        <ToggleButton
+          :model-value="!preset.filterBypassed" label="Enable filter" learn-id="sd:filter:enabled"
+          @update:model-value="preset.filterBypassed = !$event"
+        />
         <label class="flex flex-wrap items-center gap-4 text-xs">
           <!-- Type -->
           <select v-model="preset.filter.typeEstimated" class="sd-input text-xs font-mono">

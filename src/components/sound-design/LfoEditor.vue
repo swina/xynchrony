@@ -71,7 +71,7 @@ const expanded = ref(false)
       <div class="flex flex-wrap gap-3 justify-center">
         <select
           v-if="showSync && lfo.rateMode === 'sync'"
-          v-model="lfo.syncDivision" class="sd-input text-xs"
+          v-model="lfo.syncDivision" class="sd-input h-10 font-mono text-sm bg-mocha-50"
         >
           <option v-for="d in SYNC_DIVISIONS" :key="d" :value="d">{{ d }}</option>
         </select>

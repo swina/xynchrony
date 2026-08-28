@@ -8,6 +8,7 @@ import type { Layer, Zone, Envelope, Preset, CustomMidiSource } from './types'
 import { applyModMatrix, computeEnvelopeAndStartOverrides } from './modMatrix'
 import { resolveAmpEnvelope } from '../soundDesign/envelopeScope'
 import { lfoRateToHz, lfoShapeToType } from './lfoMapping'
+import { glideRateToMs } from '../soundDesign/glideMapping'
 import { blankLfo } from '../soundDesign/defaults'
 import type { EffectChain } from './effects'
 import type { SampleCache } from './SampleCache'
@@ -118,6 +119,11 @@ export interface VoiceOptions {
   note: number
   velocity01: number
   pitchBendSemitones: number
+  // The previously-played note (whole-preset-wide, VoiceManager.lastNote),
+  // or null for "no glide" -- null both when Preset.glide is off and for
+  // the very first note played (nothing to glide from). See build()'s use
+  // of computePlaybackRate() with this in place of `note`.
+  glideFromNote: number | null
   sampleCache: SampleCache
   modWheelSignal: Tone.Signal<'normalRange'>
   // Live, shared (per-VoiceManager, not per-voice) sources -- see
@@ -160,6 +166,12 @@ export class Voice {
   // full value while the note is held, 0 once released. See Manual.pdf
   // p.157's "Gate" source.
   private gateSignal!: Tone.Signal<'normalRange'>
+  // Only created when Preset.glide?.enabled -- a live Tone.Signal mirror of
+  // the glide rate, so the mod matrix's `glideRate` destination can target
+  // a real connectable Param (see modMatrix.ts) even though the actual
+  // ramp below is manual (playbackRate isn't one -- see startGlide()).
+  private glideRateSignal: Tone.Signal<'positive'> | undefined
+  private glideIntervalId: ReturnType<typeof setInterval> | undefined
   private disposables: Array<{ dispose: () => void }> = []
   private disposed = false
   private releasing = false
@@ -233,8 +245,19 @@ export class Voice {
       this.player.loopEnd = zone.loopEnd / zone.sampleRate
     }
 
-    this.applyPitch(note, layer.params.transposeSemitones, layer.params.fineTuneCents,
+    const targetPlaybackRate = this.computePlaybackRate(note, layer.params.transposeSemitones, layer.params.fineTuneCents,
       zone.rootKey, zone.fineTune, layer.params.nonTranspose, pitchBendSemitones, oneTimeOverrides.pitchDeltaSemitones)
+    const glideConfig = preset.glide
+    if (glideConfig?.enabled && this.opts.glideFromNote != null) {
+      const startPlaybackRate = this.computePlaybackRate(this.opts.glideFromNote, layer.params.transposeSemitones, layer.params.fineTuneCents,
+        zone.rootKey, zone.fineTune, layer.params.nonTranspose, pitchBendSemitones, oneTimeOverrides.pitchDeltaSemitones)
+      this.player.playbackRate = startPlaybackRate
+      this.glideRateSignal = new Tone.Signal({ value: glideConfig.rate, units: 'positive' })
+      this.disposables.push(this.glideRateSignal)
+      this.startGlide(startPlaybackRate, targetPlaybackRate, glideConfig.curve)
+    } else {
+      this.player.playbackRate = targetPlaybackRate
+    }
 
     // Amp envelope may be this layer's own, or shared via a layer group /
     // the whole patch -- see core/soundDesign/envelopeScope.ts.
@@ -356,6 +379,7 @@ export class Voice {
       patchLfo1Rate: Number(patchLfo1.frequency.value),
       patchLfo2Rate: Number(patchLfo2.frequency.value),
       wetDryMix: fxChain.wetDryFade.value,
+      glideRate: this.glideRateSignal ? Number(this.glideRateSignal.value) : 0,
     }
     const modMatrixTargets = {
       player: this.player,
@@ -375,6 +399,7 @@ export class Voice {
       basedDestinations: new Set<string>(),
       panner: this.panner,
       outGain: this.outGain,
+      glideRate: this.glideRateSignal,
       customSources: customMidiSources,
       modWheelSignal,
       pitchWheelSignal,
@@ -431,16 +456,50 @@ export class Voice {
   // baked in alongside pitch-bend/transpose/fine-tune, same "can't be a
   // live AudioParam" reasoning. A note already sustaining won't sweep from
   // a live source targeting `pitch`; it'll pick up a new value on its next
-  // note-on.
-  private applyPitch(
+  // note-on. Returns the multiplier rather than assigning it directly so
+  // build() can compute both a glide's start and target rate from the same
+  // formula (substituting `glideFromNote` for `note`) before deciding
+  // whether to jump straight to the target or ramp into it -- see
+  // startGlide() below.
+  private computePlaybackRate(
     note: number, transposeSemitones: number, layerFineTuneCents: number,
     rootKey: number, zoneFineTune: number, nonTranspose: boolean, pitchBendSemitones: number,
     pitchModSemitones: number,
-  ) {
+  ): number {
     const semitones = nonTranspose ? 0 : (note - rootKey) + transposeSemitones + pitchBendSemitones + pitchModSemitones
     const zoneFineTuneCents = (zoneFineTune / 64) * 100 // zone.fineTune is 1/64-semitone units
     const totalCents = semitones * 100 + zoneFineTuneCents + layerFineTuneCents
-    this.player.playbackRate = 2 ** (totalCents / 1200)
+    return 2 ** (totalCents / 1200)
+  }
+
+  // Manual portamento: Tone.Player.playbackRate can't be scheduled with
+  // native Web Audio ramps (see computePlaybackRate()'s comment), so this
+  // steps it by hand on a plain interval -- same "coarse but coherent"
+  // style as this app's other non-audio-graph polling (e.g.
+  // useAudioEngine.ts's 100ms heldNotes poll). `progress` accumulates by
+  // elapsed-time / current-glide-duration each tick rather than counting
+  // down a fixed total, so re-reading `glideRateSignal.value` live (the
+  // mod matrix's `glideRate` destination, modMatrix.ts) actually speeds up
+  // or slows down an in-progress glide, not just the next one.
+  private startGlide(startRate: number, targetRate: number, curve: 'linear' | 'logarithmic') {
+    let progress = 0
+    let lastTick = Tone.now()
+    this.glideIntervalId = setInterval(() => {
+      const now = Tone.now()
+      const dt = Math.max(0, now - lastTick)
+      lastTick = now
+      const rateValue = Number(this.glideRateSignal?.value ?? 64)
+      const durationSec = Math.max(0.001, glideRateToMs(rateValue) / 1000)
+      progress = Math.min(1, progress + dt / durationSec)
+      this.player.playbackRate = curve === 'logarithmic' && startRate > 0 && targetRate > 0
+        ? startRate * (targetRate / startRate) ** progress
+        : startRate + (targetRate - startRate) * progress
+      if (progress >= 1) {
+        this.player.playbackRate = targetRate
+        clearInterval(this.glideIntervalId)
+        this.glideIntervalId = undefined
+      }
+    }, 20)
   }
 
   private resolvePan(zonePan: number | null, layerPan: number): number {
@@ -474,6 +533,7 @@ export class Voice {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    if (this.glideIntervalId) clearInterval(this.glideIntervalId)
     for (const d of this.disposables) d.dispose()
     this.player?.dispose()
     this.ampEnv?.dispose()

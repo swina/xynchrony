@@ -16,17 +16,17 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { usePresetLibrary } from '../composables/usePresetLibrary'
 import { useAudioEngine } from '../composables/useAudioEngine'
 import { AudioEngine } from '../core/audio/AudioEngine'
-import { blankFxChain } from '../core/audio/effects'
+import { blankFxChain, normalizeFxChain } from '../core/audio/effects'
 import { blankLfo } from '../core/soundDesign/defaults'
 import { logPatchMapping } from '../utils/logPatchMapping'
 import PresetBrowser from './PresetBrowser.vue'
-import VirtualKeyboard from './VirtualKeyboard.vue'
-import VoiceActivityView from './VoiceActivityView.vue'
+import PerformanceFooter from './PerformanceFooter.vue'
 import FxChainEditor from './sound-design/FxChainEditor.vue'
 import ModulationEditor from './sound-design/ModulationEditor.vue'
 import FilterPanel from './sound-design/FilterPanel.vue'
 import EnvelopeScopeEditor from './sound-design/EnvelopeScopeEditor.vue'
-import { Save, Blend, Share2, Funnel, Activity } from '@lucide/vue'
+import GlideVoicePanel from './sound-design/GlideVoicePanel.vue'
+import { Save, Blend, Share2, Funnel, Activity, Gauge } from '@lucide/vue'
 
 const { currentBank, currentBankId, lastPerformancePresetKey, isCurrentBankSaveable, persistCurrentBank } = usePresetLibrary()
 const { setPreset, currentBankProg, currentPreset } = useAudioEngine()
@@ -35,7 +35,7 @@ const { setPreset, currentBankProg, currentPreset } = useAudioEngine()
 // is active gets the full pane width instead of splitting it -- each patch
 // canvas also supports its own resize handle/full-screen toggle
 // (PatchCanvasFrame.vue) on top of this.
-type Tab = 'filter' | 'fx' | 'envelope' | 'modulation' 
+type Tab = 'filter' | 'fx' | 'envelope' | 'modulation' | 'voice'
 const activeTab = ref<Tab>('filter')
 
 // Amp Envelope is per-Layer (EnvelopeScopeEditor.vue), unlike Filter/FX/
@@ -70,7 +70,10 @@ function selectPreset(bankProg: string) {
 // static-bank edit today).
 watch(currentPreset, (preset) => {
   if (!preset) return
-  preset.fx ??= blankFxChain()
+  // See SoundDesignView.vue's identical guard -- `??=` alone leaves a
+  // legacy-shaped (pre-graph-editor) `preset.fx` in place, which crashes
+  // FxChainEditor.vue reading `chain.nodes.length`.
+  preset.fx = preset.fx ? normalizeFxChain(preset.fx) : blankFxChain()
   preset.modMatrix ??= []
   preset.lfo1 ??= blankLfo()
   preset.lfo2 ??= blankLfo()
@@ -108,37 +111,42 @@ onMounted(() => {
 
       <div v-if="currentPreset" class="flex flex-col gap-2 flex-1 min-w-0">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="flex flex-wrap gap-1">
+          <div class="sd-tabs flex flex-wrap gap-0">
             <button
-              class="sd-btn inline-flex font-mono items-center gap-1.5"
-              :class="activeTab === 'filter' ? 'sd-btn-primary' : ''"
+              class="sd-tab inline-flex px-1 font-mono items-center gap-1.5"
+              :class="activeTab === 'filter' ? 'sd-tab-primary' : ''"
               @click="activeTab = 'filter'"
             >
               <Funnel :size="14" /> Filter
             </button>
             <button
-              class="sd-btn inline-flex font-mono items-center gap-1.5"
-              :class="activeTab === 'fx' ? 'sd-btn-primary' : ''"
+              class="sd-tab inline-flex font-mono items-center gap-1.5"
+              :class="activeTab === 'fx' ? 'sd-tab-primary' : ''"
               @click="activeTab = 'fx'"
             >
               <Blend :size="14" /> FX
             </button>
             <button
-              class="sd-btn inline-flex font-mono items-center gap-1.5"
-              :class="activeTab === 'envelope' ? 'sd-btn-primary' : ''"
+              class="sd-tab inline-flex font-mono items-center gap-1.5"
+              :class="activeTab === 'envelope' ? 'sd-tab-primary' : ''"
               @click="activeTab = 'envelope'"
             >
               <Activity :size="14" /> Envelope
             </button>
             <button
-              class="sd-btn inline-flex font-mono items-center gap-1.5"
-              :class="activeTab === 'modulation' ? 'sd-btn-primary' : ''"
+              class="sd-tab inline-flex font-mono items-center gap-1.5"
+              :class="activeTab === 'modulation' ? 'sd-tab-primary' : ''"
               @click="activeTab = 'modulation'"
             >
               <Share2 :size="14" /> Modulation
             </button>
-            
-            
+            <button
+              class="sd-tab inline-flex font-mono items-center gap-1.5"
+              :class="activeTab === 'voice' ? 'sd-tab-primary' : ''"
+              @click="activeTab = 'voice'"
+            >
+              <Gauge :size="14" /> Glide/Voice
+            </button>
           </div>
           <button
             class="sd-btn inline-flex items-center gap-1"
@@ -154,14 +162,14 @@ onMounted(() => {
         <FxChainEditor v-if="activeTab === 'fx' && currentPreset.fx" :chain="currentPreset.fx" learn-scope="performance" />
 
         <template v-else-if="activeTab === 'modulation'">
-          <label class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
+          <!-- <label class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
             <input
               :checked="currentPreset.modMatrixBypassed === false"
               type="checkbox"
               @change="currentPreset.modMatrixBypassed = ($event.target as HTMLInputElement).checked ? false : true"
             />
             Enable each layer's own Mod Matrix (off by default -- routings parsed from the original bank's hardware data were calibrated for a filter/routing model this app doesn't emulate, and some audibly wreck playback here. Doesn't affect the panel below, which is always your own routings.)
-          </label>
+          </label> -->
           <ModulationEditor :preset="currentPreset" />
         </template>
 
@@ -179,10 +187,11 @@ onMounted(() => {
           </div>
           <p v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">This preset has no layers.</p>
         </template>
+
+        <GlideVoicePanel v-else-if="activeTab === 'voice'" :preset="currentPreset" />
       </div>
     </div>
 
-    <VoiceActivityView />
-    <VirtualKeyboard />
+    <PerformanceFooter />
   </template>
 </template>

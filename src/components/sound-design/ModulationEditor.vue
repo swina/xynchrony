@@ -34,14 +34,14 @@ const props = defineProps<{ preset: Preset }>()
 const DEST_ORDER = [
   'filterFreq', 'filterQ', 'ampVolume', 'ampPan', 'pitch', 'sampleStart',
   'envAttack', 'envDecay', 'envSustain', 'envRelease',
-  'patchLfo1Rate', 'patchLfo2Rate', 'wetDryMix',
+  'patchLfo1Rate', 'patchLfo2Rate', 'glideRate', 'wetDryMix',
 ] as const
 
 const DEST_LABELS: Record<string, string> = {
   filterFreq: 'Filter Freq', filterQ: 'Filter Q',
   ampVolume: 'Amp Volume', ampPan: 'Amp Pan', pitch: 'Pitch', sampleStart: 'Sample Start',
   envAttack: 'Env Attack', envDecay: 'Env Decay', envSustain: 'Env Sustain', envRelease: 'Env Release',
-  patchLfo1Rate: 'LFO 1 Freq', patchLfo2Rate: 'LFO 2 Freq', wetDryMix: 'FX Wet/Dry',
+  patchLfo1Rate: 'LFO 1 Freq', patchLfo2Rate: 'LFO 2 Freq', glideRate: 'Glide Rate', wetDryMix: 'FX Wet/Dry',
 }
 const SOURCE_LABELS: Record<string, string> = {
   patchLfo1: 'LFO 1 (patch)', patchLfo2: 'LFO 2 (patch)',
@@ -278,18 +278,69 @@ const selectedPresetId = ref('')
 
 onMounted(() => { void library.refresh() })
 
+/** Custom MIDI sources actually referenced by the current mod matrix --
+ * what a saved patch needs to carry so its cables resolve when recalled. */
+function usedCustomSources(): CustomMidiSource[] {
+  const ids = new Set(
+    (props.preset.modMatrix ?? [])
+      .filter((s) => s.source.startsWith('custom:'))
+      .map((s) => s.source.slice('custom:'.length)),
+  )
+  return (props.preset.customMidiSources ?? []).filter((s) => ids.has(s.id))
+}
 async function saveAsPreset() {
   const name = prompt('Save modulation patch as...')
   if (!name) return
-  await library.saveModulation(name, { slots: props.preset.modMatrix!, lfo1: props.preset.lfo1!, lfo2: props.preset.lfo2! })
+  await library.saveModulation(name, { slots: props.preset.modMatrix!, lfo1: props.preset.lfo1!, lfo2: props.preset.lfo2!, customMidiSources: usedCustomSources() })
+}
+/** Overwrites the currently selected/recalled patch with the canvas's
+ * current routing -- "Save as…" always makes a new record, so this is the
+ * only way to persist edits back onto a patch after `applyPreset` recalls it. */
+async function saveOverPreset() {
+  if (!selectedPresetId.value) return
+  await library.updateModulation(selectedPresetId.value, { slots: props.preset.modMatrix!, lfo1: props.preset.lfo1!, lfo2: props.preset.lfo2!, customMidiSources: usedCustomSources() })
 }
 function applyPreset() {
   const record = modPresets.value.find((r) => r.id === selectedPresetId.value)
   if (!record || record.kind !== 'modulation') return
   const cloned = deepClonePlain(record.data)
+
+  // Custom MIDI sources referenced by the recalled slots aren't part of
+  // this preset yet -- reconstruct them under fresh ids (so they never
+  // collide with any custom source this preset already has) and remap the
+  // slots' `custom:<id>` source strings to match.
+  const idMap = new Map<string, string>()
+  for (const old of cloned.customMidiSources ?? []) {
+    const fresh: CustomMidiSource = { ...old, id: newId('midisrc') }
+    idMap.set(old.id, fresh.id)
+    ;(props.preset.customMidiSources ??= []).push(fresh)
+  }
+  for (const slot of cloned.slots) {
+    if (!slot.source.startsWith('custom:')) continue
+    const freshId = idMap.get(slot.source.slice('custom:'.length))
+    if (freshId) slot.source = `custom:${freshId}`
+  }
+
   props.preset.modMatrix!.splice(0, props.preset.modMatrix!.length, ...cloned.slots)
   props.preset.lfo1 = cloned.lfo1
   props.preset.lfo2 = cloned.lfo2
+
+  // The canvas only shows nodes the user has placed (opt-in, see the
+  // watch() above) -- a recalled patch's cables need their source/
+  // destination nodes seeded onto the canvas or they'd have nowhere to
+  // render (cabledSlots below filters cables to placed nodes only).
+  const nodes = props.preset.modulationNodes!
+  for (const slot of cloned.slots) {
+    if (!nodes.sources.includes(slot.source)) {
+      props.preset.modulationLayout![slot.source] ??= nextDefaultPos(nodes.sources.length, SOURCE_X)
+      nodes.sources.push(slot.source)
+    }
+    if (!nodes.destinations.includes(slot.destination)) {
+      props.preset.modulationLayout![slot.destination] ??= nextDefaultPos(nodes.destinations.length, DEST_X)
+      nodes.destinations.push(slot.destination)
+    }
+  }
+
   selectedIndex.value = null
 }
 async function deletePreset() {
@@ -320,6 +371,7 @@ async function deletePreset() {
       </select>
       <button class="sd-btn sd-btn-icon" title="Apply selected patch" :disabled="!selectedPresetId" @click="applyPreset"><FolderOpen :size="14" /></button>
       <button class="sd-btn sd-btn-icon sd-btn-danger" title="Delete selected saved patch" :disabled="!selectedPresetId" @click="deletePreset"><X :size="14" /></button>
+      <button class="sd-btn sd-btn-icon" title="Save over the selected patch" :disabled="!selectedPresetId" @click="saveOverPreset"><Save :size="14" /></button>
       <button class="sd-btn inline-flex items-center gap-1" title="Save this patch to the library" @click="saveAsPreset"><Save :size="14" /> Save as…</button>
       <button class="sd-btn sd-btn-icon" :title="fullscreen ? 'Exit full screen (Esc)' : 'Full screen'" @click="toggle">
         <Minimize2 v-if="fullscreen" :size="14" />

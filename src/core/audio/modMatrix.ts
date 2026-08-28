@@ -52,6 +52,13 @@ export interface ModMatrixTargets {
   // `ampPan`/`ampVolume` destinations (docs/plans/Modulation-Plan.md).
   panner: Tone.Panner
   outGain: Tone.Gain
+  // Live mirror of this voice's glide rate (Voice.ts's glideRateSignal) --
+  // undefined when this voice wasn't built with an active glide (Preset.
+  // glide disabled, or the very first note played with nothing to glide
+  // from). The manual playbackRate ramp in Voice.ts's startGlide() reads
+  // this signal's value every tick, so modulating it live actually changes
+  // an in-progress glide's speed, not just the next one's.
+  glideRate: Tone.Signal<'positive'> | undefined
   // Preset.customMidiSources -- resolves a `custom:<id>` slot.source to a
   // live CC signal, same underlying mechanism as the per-slot `midiCC`
   // override, just named/reusable. See resolveLiveSource() below.
@@ -89,6 +96,7 @@ export interface ModMatrixTargets {
     patchLfo1Rate: number
     patchLfo2Rate: number
     wetDryMix: number
+    glideRate: number
   }
   // Destinations whose baseline has already been folded into a cable's
   // Scale this voice -- only the FIRST cable to a given destination
@@ -137,6 +145,7 @@ function warnUnhandled(source: string, destination: string) {
 const FILTER_FREQ_MOD_RANGE_HZ = 4000 // +/- range a full-depth mod can sweep the cutoff
 const AMP_VOLUME_MOD_RANGE = 1.0 // +/- linear gain a full-depth mod can add/subtract onto outGain
 const AMP_PAN_MOD_RANGE = 1.0 // +/- pan a full-depth mod can add/subtract (Tone.Panner clamps -1..1 internally)
+const GLIDE_RATE_MOD_RANGE = 64 // +/- half the 0-127 dial range a full-depth mod can shift glide rate by
 
 export function applyModMatrix(slots: ModMatrixSlot[], targets: ModMatrixTargets): void {
   for (const slot of slots) {
@@ -291,6 +300,15 @@ export function applyModMatrix(slots: ModMatrixSlot[], targets: ModMatrixTargets
         const scale = new Tone.Scale(base, base + depth)
         sourceSignal.connect(scale)
         scale.connect(targets.fxChain.wetDryFade)
+        targets.disposables.push(scale)
+        break
+      }
+      case 'glideRate': {
+        if (!targets.glideRate) { warnUnhandled(slot.source, slot.destination); break }
+        const base = baseFor('glideRate', targets)
+        const scale = new Tone.Scale(base, base + depth * GLIDE_RATE_MOD_RANGE)
+        sourceSignal.connect(scale)
+        scale.connect(targets.glideRate)
         targets.disposables.push(scale)
         break
       }

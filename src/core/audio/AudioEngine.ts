@@ -195,6 +195,13 @@ class AudioEngineImpl {
     this.voiceManager?.panic()
   }
 
+  /** Releases every note Latch is currently holding -- called when the
+   * Latch toggle is switched off (GlideVoicePanel.vue), since a latched
+   * note's key-up otherwise never releases it on its own. */
+  releaseAllLatched(): void {
+    this.voiceManager?.releaseAllLatched()
+  }
+
   get activeVoiceCount(): number {
     return this.voiceManager?.activeVoiceCount ?? 0
   }

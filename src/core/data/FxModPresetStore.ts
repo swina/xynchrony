@@ -40,6 +40,18 @@ export class FxModPresetStore {
     return record
   }
 
+  /** Overwrites an existing record's data in place (name/id/kind/createdAt
+   * untouched) -- the "Save" counterpart to `saveModulation`'s "Save as…",
+   * for updating a patch that was recalled via `applyPreset`. */
+  async updateModulation(id: string, data: ModulationPreset): Promise<void> {
+    const db = await this.dbPromise
+    const records = await dbGetAll<FxModPresetRecord>(db, STORE_FXMOD_PRESETS)
+    const existing = records.find((r) => r.id === id && r.kind === 'modulation')
+    if (!existing) throw new Error(`Modulation preset ${id} not found`)
+    existing.data = deepClonePlain(data)
+    await dbPut(db, STORE_FXMOD_PRESETS, existing)
+  }
+
   async rename(id: string, name: string): Promise<void> {
     const db = await this.dbPromise
     const records = await dbGetAll<FxModPresetRecord>(db, STORE_FXMOD_PRESETS)

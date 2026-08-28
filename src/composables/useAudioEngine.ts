@@ -106,5 +106,6 @@ export function useAudioEngine() {
     panic,
     noteOn: AudioEngine.noteOn.bind(AudioEngine),
     noteOff: AudioEngine.noteOff.bind(AudioEngine),
+    releaseAllLatched: AudioEngine.releaseAllLatched.bind(AudioEngine),
   }
 }

@@ -3,7 +3,7 @@
 // to duplicating existing data). Defaults aim for "audible and inoffensive
 // out of the box": instant attack, full sustain, a short release so
 // nothing clicks, no filter resonance, full-range key/velocity.
-import type { Layer, Zone, Envelope, AuxEnvelope, Lfo, FilterParams, LayerGroup } from '../audio/types'
+import type { Layer, Zone, Envelope, AuxEnvelope, Lfo, FilterParams, LayerGroup, Glide, Latch } from '../audio/types'
 
 // Wide-open lowpass = inaudible effect until the user dials it in via the
 // Filter tab. Every Sound Design-created/duplicated preset gets this (see
@@ -32,6 +32,14 @@ export function blankAuxEnvelope(): AuxEnvelope {
 
 export function blankLfo(): Lfo {
   return { rate: 64, shape: 'sine', delay: 0, variation: 0, sync: 'freeRun' }
+}
+
+export function blankGlide(): Glide {
+  return { enabled: false, curve: 'linear', rate: 64 }
+}
+
+export function blankLatch(): Latch {
+  return { enabled: false, maxNotes: 4 }
 }
 
 // New group starts as a copy of blankEnvelope()/blankAuxEnvelope(), not

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // Reusable knob control: drag (vertical) or scroll-wheel to change value,
 // arrow keys while focused, click the value readout to type an exact
-// number, and (when `learnId` is set) MIDI Learn -- click the small badge
-// under the dial to arm learning, twiddle a physical CC knob to bind it,
-// click again to clear. See docs/plans/sound-design-ui.md and
-// useMidiLearn.ts for the binding model.
+// number, and (when `learnId` is set) MIDI Learn -- right-click the dial
+// for a context menu (MidiLearnMenu.vue) to arm learning/clear an existing
+// binding; a small dot on the dial shows bound/learning state at a glance.
+// See docs/plans/sound-design-ui.md and useMidiLearn.ts for the binding
+// model.
 import { ref, computed, onMounted } from 'vue'
 import { useMidiLearn } from '../../composables/useMidiLearn'
+import MidiLearnMenu from './MidiLearnMenu.vue'
 
 const props = withDefaults(defineProps<{
   modelValue: number
@@ -138,18 +140,13 @@ function cancelEditing() {
 
 const isLearning = computed(() => !!props.learnId && midiLearn?.learningId.value === props.learnId)
 const boundCc = computed(() => (props.learnId ? midiLearn?.bindings.value[props.learnId] : undefined))
-const learnLabel = computed(() => (boundCc.value !== undefined ? `CC${boundCc.value}` : 'learn'))
-const learnTitle = computed(() => {
-  if (isLearning.value) return 'Move a MIDI controller to bind (click to cancel)'
-  if (boundCc.value !== undefined) return `Bound to CC${boundCc.value} -- click to clear`
-  return 'Click, then move a MIDI controller to bind (MIDI Learn)'
-})
 
-function toggleLearn() {
-  if (!midiLearn || !props.learnId) return
-  if (isLearning.value) midiLearn.cancelLearn()
-  else if (boundCc.value !== undefined) midiLearn.clearBinding(props.learnId)
-  else midiLearn.startLearn(props.learnId)
+const menuOpen = ref(false)
+const menuPos = ref({ x: 0, y: 0 })
+function openMenu(e: MouseEvent) {
+  if (!props.learnId) return
+  menuPos.value = { x: e.clientX, y: e.clientY }
+  menuOpen.value = true
 }
 
 // Deliberately NOT unregistered on unmount: MIDI Learn should keep working
@@ -193,12 +190,22 @@ onMounted(() => {
       @wheel="onWheel"
       @keydown="onKeydown"
       @dblclick="startEditing"
+      @contextmenu.prevent="openMenu"
     >
       <div class="sd-dial-track" :style="{ background: trackGradient }" />
       <div class="sd-dial-face">
         <div class="sd-dial-pointer" :style="{ transform: `rotate(${angle}deg)` }" />
       </div>
+      <div
+        v-if="learnId && (boundCc !== undefined || isLearning)"
+        class="sd-midi-indicator"
+        :class="{ 'is-bound': boundCc !== undefined, 'is-learning': isLearning }"
+        :title="isLearning ? 'Learning MIDI CC...' : `Bound to CC${boundCc}`"
+        style="top: 2px; right: 2px"
+      />
     </div>
+
+    <MidiLearnMenu v-if="learnId && menuOpen" :learn-id="learnId" :x="menuPos.x" :y="menuPos.y" @close="menuOpen = false" />
 
     <input
       v-if="editing"
@@ -217,16 +224,5 @@ onMounted(() => {
     </button>
 
     <div v-if="label" class="sd-dial-label">{{ label }}</div>
-
-    <button
-      v-if="learnId"
-      type="button"
-      class="sd-dial-learn"
-      :class="{ 'is-bound': boundCc !== undefined, 'is-learning': isLearning }"
-      :title="learnTitle"
-      @click="toggleLearn"
-    >
-      {{ learnLabel }}
-    </button>
   </div>
 </template>

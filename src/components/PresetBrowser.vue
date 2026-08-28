@@ -27,18 +27,18 @@ const entries = computed(() => {
 
 <template>
   <div class="flex flex-col gap-3 w-full max-w-2xl">
-    <div class="flex gap-2">
+    <div class="sd-tabs flex gap-2">
       <input
         v-model="search"
         type="text"
         placeholder="Search presets&hellip;"
-        class="sd-input flex-1 rounded-lg px-3 py-2 text-sm"
+        class="flex-1 px-3 py-1.5 text-xs"
       />
       <select
         v-model="categoryFilter"
-        class="sd-input rounded-lg px-3 py-2 text-sm"
+        class="px-3 py-1.5 text-xs font-mono bg-mocha-50"
       >
-        <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
+        <option v-for="c in categories" :key="c" :value="c" class="font-mono">{{ c }}</option>
       </select>
     </div>
 
@@ -48,7 +48,7 @@ const entries = computed(() => {
       <button
         v-for="[bankProg, preset] in entries"
         :key="bankProg"
-        class="sd-row w-full text-xs text-left px-3 py-2 flex items-center justify-between gap-2 transition-colors"
+        class="sd-row w-full font-mono text-xs text-left px-3 py-2 flex items-center justify-between gap-2 transition-colors"
         :class="bankProg === activeBankProg ? 'sd-row-active' : ''"
         @click="emit('select', bankProg)"
       >

@@ -22,6 +22,11 @@ async function saveModulation(name: string, data: ModulationPreset): Promise<voi
   await refresh()
 }
 
+async function updateModulation(id: string, data: ModulationPreset): Promise<void> {
+  await store.updateModulation(id, data)
+  await refresh()
+}
+
 async function rename(id: string, name: string): Promise<void> {
   await store.rename(id, name)
   await refresh()
@@ -33,5 +38,5 @@ async function remove(id: string): Promise<void> {
 }
 
 export function useFxModLibrary() {
-  return { records, refresh, saveFx, saveModulation, rename, remove }
+  return { records, refresh, saveFx, saveModulation, updateModulation, rename, remove }
 }

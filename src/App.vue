@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePresetLibrary } from './composables/usePresetLibrary'
 import { useAudioEngine } from './composables/useAudioEngine'
+import { useKeyboardVisibility } from './composables/useKeyboardVisibility'
 import TopBar from './components/TopBar.vue'
 import PerformanceView from './components/PerformanceView.vue'
 import SoundDesignView from './components/sound-design/SoundDesignView.vue'
@@ -9,6 +10,13 @@ import { Volume2 } from '@lucide/vue'
 
 const { currentBank, loading, error, loadManifest, loadBank } = usePresetLibrary()
 const { started, previouslyEnabled, ensureStarted } = useAudioEngine()
+// .sd-page-main's reserved bottom padding needs to track the keyboard
+// layer's own show/hide state (PerformanceFooter.vue/TransportToolbar.vue)
+// -- see main.css's --sd-toolbar-height/--sd-keyboard-layer-height.
+const { visible: keyboardVisible } = useKeyboardVisibility()
+const footerHeight = computed(() => (
+  keyboardVisible.value ? 'calc(var(--sd-toolbar-height) + var(--sd-keyboard-layer-height))' : 'var(--sd-toolbar-height)'
+))
 
 const initError = ref<string | null>(null)
 const mode = ref<'performance' | 'soundDesign'>('performance')
@@ -51,7 +59,7 @@ async function handleStart() {
 </script>
 
 <template>
-  <main class="min-h-screen flex flex-col items-center gap-5 p-1">
+  <main class="sd-page-main min-h-screen flex flex-col items-center gap-0 p-1" :style="{ '--sd-footer-height': footerHeight }">
     <TopBar :mode="mode" @change="mode = $event" />
 
     <div v-if="initError || error" style="color: var(--color-danger)">{{ initError ?? error }}</div>

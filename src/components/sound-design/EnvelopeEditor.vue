@@ -39,8 +39,8 @@ const fmtPlain = (v: number) => String(Math.round(v))
 </script>
 
 <template>
-  <div class="sd-panel flex flex-col gap-3 w-[30rem] shrink-0">
-    <div class="flex items-center justify-between">
+  <div class="sd-node flex flex-col gap-3 w-[30rem] shrink-0">
+    <div class="flex items-center justify-between mb-9">
       <h4 class="sd-panel-title">{{ title }}</h4>
       <button class="sd-btn sd-btn-icon" :title="showDials ? 'Hide dials' : 'Show dials'" @click="showDials = !showDials">
         <SlidersHorizontal :size="14" />

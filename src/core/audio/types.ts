@@ -85,6 +85,25 @@ export interface Lfo {
   bypass?: boolean
 }
 
+// Patch-level portamento -- see Preset.glide. `rate` is a 0-127 dial byte
+// (core/soundDesign/glideMapping.ts's glideRateToMs()), not seconds
+// directly, same convention as Lfo.rate. `curve` picks the interpolation
+// shape a new voice's pitch slides through from the previously-played
+// note's pitch to its own target (Voice.ts's startGlide()).
+export interface Glide {
+  enabled: boolean
+  curve: 'linear' | 'logarithmic'
+  rate: number
+}
+
+// Patch-level FIFO note-hold buffer -- see Preset.latch. Notes released
+// while latched keep sounding; `maxNotes` (1-6) caps how many stay held at
+// once, evicting (releasing) the oldest once a new note would exceed it.
+export interface Latch {
+  enabled: boolean
+  maxNotes: number
+}
+
 export interface ModMatrixSlot {
   source: string
   destination: string
@@ -221,6 +240,21 @@ export interface Preset {
   // back to ModulationEditor.vue's computed default layout, same lazy-seed
   // pattern as FxChain.inputPosition/outputPosition.
   modulationLayout?: Record<string, { x: number; y: number }>
+  // Portamento -- optional/absent = off, same lazy-seed pattern as
+  // filter/filterEnv/filterBypassed above. Seeded by GlideVoicePanel.vue;
+  // VoiceManager/Voice.ts read it defensively (`preset.glide?.enabled`) so
+  // a preset that's never opened that panel behaves exactly as before.
+  glide?: Glide
+  // Voice allocation mode -- optional/absent = 'poly' with the engine's
+  // old global voice ceiling (VoiceManager.ts's DEFAULT_POLYPHONY), same
+  // backward-compatible default as every other optional Preset field.
+  voiceMode?: 'poly' | 'mono'
+  // Polyphonic-mode voice ceiling, UI-capped 1-16 (GlideVoicePanel.vue).
+  // Ignored in 'mono' mode. Absent = VoiceManager's old global default.
+  maxVoices?: number
+  // Note-hold (FIFO) -- optional/absent = off, same lazy-seed pattern as
+  // `glide` above.
+  latch?: Latch
 }
 
 // A named, reusable MIDI CC source for the Modulation patch editor -- see
@@ -296,6 +330,13 @@ export interface ModulationPreset {
   slots: ModMatrixSlot[]
   lfo1: Lfo
   lfo2: Lfo
+  // Custom MIDI sources referenced by `slots` -- without these, a cable
+  // recalled onto a different preset (or the same preset after its custom
+  // sources were removed) would reference a `custom:<id>` that resolves to
+  // nothing. Optional since records saved before this field existed have
+  // none; `applyPreset` in ModulationEditor.vue re-ids them on recall so
+  // they never collide with the target preset's existing custom sources.
+  customMidiSources?: CustomMidiSource[]
 }
 
 export interface BankMeta {

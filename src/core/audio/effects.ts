@@ -201,7 +201,7 @@ function isLegacyShape(config: FxChain | LegacyEffectChainConfig): config is Leg
  * 2-node graph (input -> slotA? -> slotB? -> output), same sound, so old
  * saved presets don't need any manual migration. No-op (returns as-is) for
  * anything already in the current shape. Never mutates its input. */
-function normalizeFxChain(config: FxChain | LegacyEffectChainConfig): FxChain {
+export function normalizeFxChain(config: FxChain | LegacyEffectChainConfig): FxChain {
   if (!isLegacyShape(config)) return config
   const nodes: FxNode[] = []
   const edges: FxEdge[] = []

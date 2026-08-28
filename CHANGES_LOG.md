@@ -1,5 +1,115 @@
 # Changes Log
 
+## 2026-08-29 (master)
+
+### FIX
+- The Modulation preset library (`ModulationEditor.vue`'s "Load saved
+  patch") only ever exposed `saveFx`/`saveModulation` -- both always
+  insert a brand-new record via `prompt()`, so once a saved patch was
+  recalled and tweaked there was no way to save the edits back onto it,
+  only duplicate it under a new name. Added `FxModPresetStore.
+  updateModulation()` / `useFxModLibrary().updateModulation()` and a new
+  overwrite "Save" icon button (enabled only while a patch is selected)
+  next to "Save as…".
+- Recalling a saved modulation patch (`applyPreset()`) restored
+  `modMatrix`/`lfo1`/`lfo2` but never touched `Preset.modulationNodes`/
+  `modulationLayout` -- since the canvas only renders nodes the user has
+  explicitly placed (opt-in, see 2026-08-28's entry), a recalled patch's
+  cables had no source/destination nodes to draw between and simply
+  didn't render. `applyPreset()` now seeds any missing node (with a
+  default layout position) for every source/destination the recalled
+  slots reference. Also: `ModulationPreset` never carried
+  `customMidiSources` at all, so a recalled cable referencing one would
+  permanently resolve to nothing outside the exact session it was created
+  in -- `ModulationPreset.customMidiSources` now round-trips them,
+  re-issued under fresh ids on recall so they never collide with the
+  target preset's own.
+- `Uncaught TypeError: Cannot read properties of undefined (reading
+  'length')` in `FxChainEditor.vue`'s `canAdd` computed
+  (`chain.nodes.length`), reachable from both Sound Design's FX tab and
+  the (now-relocated, see below) Global FX panel. Root cause: `preset.fx
+  ??= blankFxChain()` (`SoundDesignView.vue`/`PerformanceView.vue`) and
+  `useGlobalFx.ts`'s `localStorage` load only fill in when `fx` is
+  missing entirely -- a chain persisted before the graph-based FX editor
+  shipped is still in the legacy `{slotA,slotB,wetDry}` shape (no
+  `nodes`/`edges`) and is truthy, so it sailed straight through. There was
+  already a `normalizeFxChain()` for exactly this legacy shape, but it was
+  only ever applied deep in the audio engine's render path, never to the
+  UI-bound object. Exported it from `effects.ts` and applied it at all
+  three load sites.
+
+### FEATURE
+- Glide (portamento): new `Preset.glide` (`enabled`/`curve`: `'linear' |
+  'logarithmic'`/`rate`). `Tone.Player.playbackRate` is a plain number
+  setter, not a connectable `Tone.Param` (can't be scheduled with native
+  Web Audio ramps), so a new voice's pitch is stepped by hand on a plain
+  `setInterval` (`Voice.ts`'s `startGlide()`) from the previous note's
+  pitch to its own target, Linear (`start + (target-start)*t`) or
+  Logarithmic (`start * (target/start)**t`, constant-ratio-per-time).
+  Also usable as a live modulation destination (`glideRate` in
+  `modMatrix.ts`) despite that constraint: glide rate is mirrored into a
+  real `Tone.Signal` the existing `Tone.Scale`-based mod-matrix pattern
+  can target normally, and the manual ramp re-reads that signal's value
+  every tick, so modulating it live actually speeds up/slows down an
+  in-progress glide.
+- Voice Mode: `Preset.voiceMode` (`'poly' | 'mono'`) + `Preset.maxVoices`
+  (UI-capped 1-16, replaces the engine's old fixed 64-voice ceiling for
+  any preset that sets it -- absent keeps the old default).
+  `VoiceManager.ts`'s monophonic mode is last-note-priority with legato
+  retrigger: a new note always stops whatever's sounding and replaces it;
+  releasing the currently-sounding note falls back to the next held note
+  in a note-priority stack (gliding into it when Glide is on); releasing
+  a background held note further down the stack just updates the stack,
+  no retrigger.
+- Latch: `Preset.latch` (`enabled`/`maxNotes`, 1-6) -- a FIFO note-hold
+  buffer, not a sustain-until-toggled-off or per-key-toggle scheme
+  (deliberately, per direction during planning): a latched note's
+  key-up doesn't release it; a new note past the FIFO cap evicts
+  (releases) the oldest. `VoiceManager.releaseAllLatched()` releases
+  everything when the Latch toggle itself is switched off.
+- New "Glide/Voice" tab (`GlideVoicePanel.vue`) in both Sound Design and
+  Performance mode for all three of the above, following `FilterPanel.
+  vue`'s existing "optional preset field, lazily seeded by its own panel,
+  engine reads it defensively" pattern.
+
+### CHANGE
+- "Enable filter"/"Enable glide"/"Enable latch" changed from
+  `<input type="checkbox">` to a new `ToggleButton.vue` (icon + label
+  button, `Power` icon, `sd-btn`/`sd-btn-primary` styling matching the
+  existing FX-node/LFO bypass buttons) that also supports MIDI Learn.
+- MIDI Learn's always-visible "learn"/"CCn" pill badge (`Dial.vue`) is
+  gone, replaced app-wide by a right-click context menu
+  (`MidiLearnMenu.vue`, teleported, closes on outside click/Escape):
+  current binding status, "MIDI Learn" (or "Cancel Learning"), and
+  "Clear MIDI Binding" when one exists. A small dot on the control
+  (`.sd-midi-indicator`, blue when bound, pulsing while arming) replaces
+  the badge as the at-a-glance state indicator. Affects every Dial in the
+  app plus the new `ToggleButton.vue`.
+- `VirtualKeyboard.vue`/`VoiceActivityView.vue` moved out of each view's
+  normal document flow into a fixed-bottom bar (previously just below the
+  tab content, scrolled with the page). Later split into two stacked
+  fixed layers (`PerformanceFooter.vue`): an always-visible toolbar
+  (`.sd-fixed-toolbar`) and a keyboard+meter layer directly above it
+  (`.sd-fixed-keyboard-layer`) that can be shown/hidden (new
+  `useKeyboardVisibility.ts` singleton, toggled by a `Piano` icon button
+  in the toolbar). `App.vue`'s `.sd-page-main` reserves bottom padding
+  sized off the same visibility flag so page content is never hidden
+  behind either layer, and never leaves a gap when the keyboard is
+  hidden.
+- MIDI device select, BPM, Master Volume, Global FX, and Panic moved out
+  of `TopBar.vue` into the new fixed toolbar (`TransportToolbar.vue`) --
+  "always want at hand while playing" controls belong next to the
+  keyboard, not the page header. The Global FX popover now opens upward
+  (`bottom-full` instead of `top-full`) since it's anchored at the bottom
+  of the viewport. The Global FX button also now shows a `.sd-btn-mocha`
+  background whenever the chain actually has nodes patched in (`nodes.
+  length > 0`) -- a persistent "Global FX is active" indicator,
+  independent of the popover-open highlight.
+- `VirtualKeyboard.vue`'s key height reduced (`h-32` -> `h-20`); black
+  keys rescaled proportionally (`h-20` -> `h-12`) to keep the same ~60%
+  height ratio against the shorter white keys instead of looking
+  oversized.
+
 ## 2026-08-28 (master)
 
 ### FIX

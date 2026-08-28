@@ -7,14 +7,17 @@
 // and docs/ARCHITECTURE.md.
 import { ref, watch } from 'vue'
 import { AudioEngine } from '../core/audio/AudioEngine'
-import { blankFxChain, type FxChain } from '../core/audio/effects'
+import { blankFxChain, normalizeFxChain, type FxChain } from '../core/audio/effects'
 
 const STORAGE_KEY = 'emulatorx3.globalFx'
 
 function loadConfig(): FxChain {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw) as FxChain
+    // A chain persisted before the graph editor shipped is still in the
+    // legacy {slotA,slotB,wetDry} shape (no `nodes`/`edges`) -- normalize
+    // it or FxChainEditor.vue crashes reading `chain.nodes.length`.
+    if (raw) return normalizeFxChain(JSON.parse(raw))
   } catch {
     // corrupt/unavailable storage -- fall through to a blank config
   }

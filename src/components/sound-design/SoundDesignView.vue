@@ -7,7 +7,7 @@ import { useUserBanks } from '../../composables/useUserBanks'
 import { useAudioEngine } from '../../composables/useAudioEngine'
 import { AudioEngine } from '../../core/audio/AudioEngine'
 import type { Bank } from '../../core/audio/types'
-import { blankFxChain } from '../../core/audio/effects'
+import { blankFxChain, normalizeFxChain } from '../../core/audio/effects'
 import { blankLfo } from '../../core/soundDesign/defaults'
 import BankManagerPanel from './BankManagerPanel.vue'
 import PresetListPanel from './PresetListPanel.vue'
@@ -21,9 +21,9 @@ import LfoEditor from './LfoEditor.vue'
 import ModMatrixEditor from './ModMatrixEditor.vue'
 import FxChainEditor from './FxChainEditor.vue'
 import ModulationEditor from './ModulationEditor.vue'
-import VirtualKeyboard from '../VirtualKeyboard.vue'
-import VoiceActivityView from '../VoiceActivityView.vue'
-import { Layers, Funnel, Activity, Sparkles, Radio, Grid3x3, Blend, Share2 } from '@lucide/vue'
+import GlideVoicePanel from './GlideVoicePanel.vue'
+import PerformanceFooter from '../PerformanceFooter.vue'
+import { Layers, Funnel, Activity, Sparkles, Radio, Grid3x3, Blend, Share2, Gauge } from '@lucide/vue'
 
 const EDIT_BANK_ID = 'sound-design-scratch'
 const EDIT_PRESET_KEY = 'edit'
@@ -37,7 +37,7 @@ const selectedLayer = computed(() => {
   return activePreset.value.layers[activeLayerIndex.value] ?? null
 })
 
-type Tab = 'layers' | 'filter' | 'envelope' | 'aux' | 'lfos' | 'modmatrix' | 'fx' | 'patchmod'
+type Tab = 'layers' | 'filter' | 'envelope' | 'aux' | 'lfos' | 'modmatrix' | 'fx' | 'patchmod' | 'voice'
 const activeTab = ref<Tab>('layers')
 const TABS: Array<{ id: Tab; label: string; icon: unknown }> = [
   { id: 'layers', label: 'Layers', icon: Layers },
@@ -48,6 +48,7 @@ const TABS: Array<{ id: Tab; label: string; icon: unknown }> = [
   { id: 'modmatrix', label: 'Mod/Matrix', icon: Grid3x3 },
   { id: 'fx', label: 'FX', icon: Blend },
   { id: 'patchmod', label: 'Patch Mod', icon: Share2 },
+  { id: 'voice', label: 'Glide/Voice', icon: Gauge },
 ]
 
 // FX/patch-level Modulation are optional/lazily-seeded Preset fields (same
@@ -56,7 +57,12 @@ const TABS: Array<{ id: Tab; label: string; icon: unknown }> = [
 // bind to, same as FilterPanel.vue's existing pattern.
 watch(activePreset, (preset) => {
   if (!preset) return
-  preset.fx ??= blankFxChain()
+  // `??=` alone isn't enough here: a bank saved before the FX graph editor
+  // shipped already has a truthy `preset.fx` in the legacy {slotA,slotB}
+  // shape (no `nodes`/`edges`), which crashes FxChainEditor.vue trying to
+  // read `chain.nodes.length` -- normalize it in place instead of only in
+  // the audio engine's own render path (core/audio/effects.ts's rebuild()).
+  preset.fx = preset.fx ? normalizeFxChain(preset.fx) : blankFxChain()
   preset.modMatrix ??= []
   preset.lfo1 ??= blankLfo()
   preset.lfo2 ??= blankLfo()
@@ -148,14 +154,14 @@ watch(activePreset, (preset) => {
           </template>
 
           <template v-else-if="activeTab === 'modmatrix'">
-            <label v-if="activePreset" class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
+            <!-- <label v-if="activePreset" class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
               <input
                 :checked="activePreset.modMatrixBypassed === false"
                 type="checkbox"
                 @change="activePreset.modMatrixBypassed = ($event.target as HTMLInputElement).checked ? false : true"
               />
               Enable each layer's own Mod Matrix (off by default -- routings parsed from the original bank's hardware data were calibrated for a filter/routing model this app doesn't emulate, and some audibly wreck playback here. Doesn't affect the Patch Mod tab, which is always your own routings.)
-            </label>
+            </label> -->
             <ModMatrixEditor v-if="selectedLayer" :layer="selectedLayer" />
             <div v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">Select a layer in the Layers tab first.</div>
           </template>
@@ -163,18 +169,19 @@ watch(activePreset, (preset) => {
           <FxChainEditor v-else-if="activeTab === 'fx' && activePreset?.fx" :chain="activePreset.fx" learn-scope="a" />
 
           <ModulationEditor v-else-if="activeTab === 'patchmod' && activePreset" :preset="activePreset" />
+
+          <GlideVoicePanel v-else-if="activeTab === 'voice'" :preset="activePreset" />
         </div>
       </div>
     </div>
 
     <template v-if="activeBank && activePreset">
-      <VoiceActivityView />
-      <VirtualKeyboard />
       <p class="text-xs max-w-sm text-center" style="color: var(--color-ink-soft)">
         Live preview of "{{ activePreset.name }}". Select a layer in the Layers tab to edit its filter/envelopes/LFOs/
-        mod matrix &mdash; drag a dial to set it, click its number to type a value, or click "learn" and move a MIDI
+        mod matrix &mdash; drag a dial to set it, click its number to type a value, or right-click it and move a MIDI
         knob to bind it.
       </p>
+      <PerformanceFooter />
     </template>
   </div>
 </template>
