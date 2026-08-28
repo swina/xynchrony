@@ -13,6 +13,7 @@ import { useAudioEngine } from '../composables/useAudioEngine'
 import { useMidiInput } from '../composables/useMidiInput'
 import { useUserBanks } from '../composables/useUserBanks'
 import { useGlobalFx } from '../composables/useGlobalFx'
+import { useGlobalTempo } from '../composables/useGlobalTempo'
 import { AudioEngine } from '../core/audio/AudioEngine'
 import { logPatchMapping } from '../utils/logPatchMapping'
 import ModeSwitcher from './ModeSwitcher.vue'
@@ -28,6 +29,7 @@ const { masterVolume, setMasterVolume, setPreset, currentPreset, panic } = useAu
 const { isSupported, devices, selectedId, init, selectDevice } = useMidiInput()
 const { activeBank } = useUserBanks()
 const { config: globalFxConfig } = useGlobalFx()
+const { bpm, MIN_BPM, MAX_BPM } = useGlobalTempo()
 
 const showGlobalFx = ref(false)
 
@@ -78,6 +80,16 @@ async function switchBank(bankId: string) {
       </select>
     </div>
     <div v-else class="text-xs" style="color: var(--color-danger)">Web MIDI not supported</div>
+
+    <div class="flex items-center gap-1" title="Global BPM -- used by tempo-synced patch-level LFOs (Modulation panel)">
+      <label class="text-xs" style="color: var(--color-ink-soft)">BPM</label>
+      <input
+        type="number" :min="MIN_BPM" :max="MAX_BPM" step="1"
+        :value="bpm"
+        class="sd-input text-xs w-14"
+        @change="bpm = Number(($event.target as HTMLInputElement).value)"
+      />
+    </div>
 
     <div class="flex items-center gap-2">
       <Volume2 :size="14" style="color: var(--color-ink-soft)" />

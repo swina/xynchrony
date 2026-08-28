@@ -152,7 +152,18 @@ onMounted(() => {
         </div>
 
         <FxChainEditor v-if="activeTab === 'fx' && currentPreset.fx" :chain="currentPreset.fx" learn-scope="performance" />
-        <ModulationEditor v-else-if="activeTab === 'modulation'" :preset="currentPreset" />
+
+        <template v-else-if="activeTab === 'modulation'">
+          <label class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
+            <input
+              :checked="currentPreset.modMatrixBypassed === false"
+              type="checkbox"
+              @change="currentPreset.modMatrixBypassed = ($event.target as HTMLInputElement).checked ? false : true"
+            />
+            Enable each layer's own Mod Matrix (off by default -- routings parsed from the original bank's hardware data were calibrated for a filter/routing model this app doesn't emulate, and some audibly wreck playback here. Doesn't affect the panel below, which is always your own routings.)
+          </label>
+          <ModulationEditor :preset="currentPreset" />
+        </template>
 
         <FilterPanel v-else-if="activeTab === 'filter'" :preset="currentPreset" />
 

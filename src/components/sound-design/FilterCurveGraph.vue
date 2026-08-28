@@ -61,23 +61,23 @@ function levelAt(x: number, type: string, cutoffX: number, resonance: number): n
   switch (type) {
     case 'lowpass': {
       const base = stepBlend(x, cutoffX, ROLLOFF_W, PASS_LEVEL, BASE_LEVEL)
-      return Math.min(127, base + Math.max(0, resonance - PASS_LEVEL) * gaussian(x, cutoffX, bumpWidth))
+      return Math.min(127, base + resonance * gaussian(x, cutoffX, bumpWidth))
     }
     case 'highpass': {
       const base = stepBlend(x, cutoffX, ROLLOFF_W, BASE_LEVEL, PASS_LEVEL)
-      return Math.min(127, base + Math.max(0, resonance - PASS_LEVEL) * gaussian(x, cutoffX, bumpWidth))
+      return Math.min(127, base + resonance * gaussian(x, cutoffX, bumpWidth))
     }
     case 'bandpass':
     case 'peaking':
-      return Math.min(127, BASE_LEVEL + Math.max(0, resonance - BASE_LEVEL) * gaussian(x, cutoffX, bumpWidth))
+      return Math.min(127, BASE_LEVEL + resonance * gaussian(x, cutoffX, bumpWidth))
     case 'notch':
       return PASS_LEVEL - (PASS_LEVEL - BASE_LEVEL) * (resonance / 127) * gaussian(x, cutoffX, bumpWidth)
     case 'lowshelf': {
-      const shelfLevel = PASS_LEVEL + (resonance - PASS_LEVEL) * 0.6
+      const shelfLevel = PASS_LEVEL + (resonance / 127) * 45
       return stepBlend(x, cutoffX, ROLLOFF_W * 1.6, shelfLevel, PASS_LEVEL)
     }
     case 'highshelf': {
-      const shelfLevel = PASS_LEVEL + (resonance - PASS_LEVEL) * 0.6
+      const shelfLevel = PASS_LEVEL + (resonance / 127) * 45
       return stepBlend(x, cutoffX, ROLLOFF_W * 1.6, PASS_LEVEL, shelfLevel)
     }
     case 'allpass':

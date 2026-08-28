@@ -70,6 +70,19 @@ export interface Lfo {
   delay: number
   variation: number
   sync: 'keySync' | 'freeRun'
+  // Patch-level LFOs only (Preset.lfo1/lfo2) -- per-layer LFOs never set
+  // these and always behave as 'hz' (today's rate byte -> lfoRateToHz()
+  // curve). Optional/absent = 'hz', same lazy-seed pattern as everything
+  // else on Preset -- see core/audio/lfoMapping.ts's syncDivisionToHz()
+  // and docs/plans/Modulation-Plan.md.
+  rateMode?: 'hz' | 'sync'
+  syncDivision?: string // one of SYNC_DIVISIONS, used when rateMode === 'sync'
+  // Patch-level LFOs only, set from the Modulation canvas's per-node bypass
+  // toggle (ModulationEditor.vue, mirrors FxNode.bypass) -- when true, this
+  // LFO's routings are skipped entirely (no modulation applied), same as
+  // an FX node's bypass being a fully-dry passthrough rather than deleting
+  // the node/its cables. Optional/absent = false (active).
+  bypass?: boolean
 }
 
 export interface ModMatrixSlot {
@@ -168,6 +181,54 @@ export interface Preset {
   // are stored/editable but not yet applied to playback.
   lfo1?: Lfo
   lfo2?: Lfo
+  // Bypasses every layer's OWN `modMatrix` routings for this preset (not
+  // `preset.modMatrix` above, which is always applied -- that's exclusively
+  // user-authored through a Modulation patch editor, never raw/imported).
+  // Defaults to bypassed (`?? true`, read in Voice.ts) -- same "missing
+  // means off" direction as `filterBypassed`, but universal rather than
+  // per-bank: a static bank's `layer.modMatrix` is real hardware data
+  // parsed from the E4B binary, calibrated for E-mu's own per-voice
+  // routing/filter behavior this app doesn't emulate, and some of it
+  // audibly wrecks playback here in ways that were hard to isolate control-
+  // by-control (confirmed live -- see docs/plans/FX-Modulations.md). A
+  // Sound-Design-authored layer's own routings need the same explicit
+  // opt-in the first time, exactly like Filter's "Enable filter" checkbox.
+  modMatrixBypassed?: boolean
+  // Named, reusable MIDI CC sources a patch can define once and cable from
+  // multiple times in the Modulation patch editor -- "Create MIDI Sources
+  // (naming and CC)" from docs/plans/Modulation-Plan.md. Distinct from the
+  // existing anonymous per-cable `ModMatrixSlot.midiCC` override: that one
+  // overrides a single slot's source with a raw CC number entered inline;
+  // this is a named catalog entry reusable across many cables. Resolved in
+  // core/audio/modMatrix.ts via a `custom:<id>` source string.
+  customMidiSources?: CustomMidiSource[]
+  // Which source/destination nodes the user has actually placed on the
+  // Modulation canvas (ModulationEditor.vue) -- the canvas does NOT show
+  // every catalog entry by default; the user adds a node by picking from
+  // an "Add Source"/"Add Destination" combo, same opt-in shape as
+  // FxChain's free-form node graph, even though the node *catalog* itself
+  // (unlike FX algorithms) is still fixed/known, not user-defined. Each
+  // entry is a source/destination id from `data/modMatrixEnums.ts`'s
+  // catalogs, or `custom:<CustomMidiSource.id>`. Lazily migrated from any
+  // pre-existing `modMatrix` cables' source/destination the first time a
+  // preset without this field is opened, so already-built routings never
+  // lose their visible nodes.
+  modulationNodes?: { sources: string[]; destinations: string[] }
+  // Persisted canvas positions for the Modulation patch editor's nodes
+  // (keyed by node id: 'patchLfo1', 'pitchWheel', 'filterFreq', a custom
+  // source's id, etc.) -- "every node can be dragged/moved"
+  // (docs/plans/Modulation-Plan.md's Canvas section). Absent entries fall
+  // back to ModulationEditor.vue's computed default layout, same lazy-seed
+  // pattern as FxChain.inputPosition/outputPosition.
+  modulationLayout?: Record<string, { x: number; y: number }>
+}
+
+// A named, reusable MIDI CC source for the Modulation patch editor -- see
+// Preset.customMidiSources above.
+export interface CustomMidiSource {
+  id: string
+  name: string
+  cc: number // 0-127
 }
 
 // Effect algorithm catalog -- data shapes only; the actual Tone.js node

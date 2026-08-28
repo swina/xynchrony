@@ -19,6 +19,11 @@ class AudioEngineImpl {
   // bus" rather than any per-channel concept this app doesn't have.
   private globalFxChain: EffectChain | null = null
   private started = false
+  // Global BPM for patch-level LFO tempo-sync -- see useGlobalTempo.ts.
+  // Stored here (not only on VoiceManager) so a VoiceManager created later
+  // (loadBank()/ensureVoiceManager()) picks up whatever was last set,
+  // same reasoning as globalFxChain surviving a preset swap.
+  private bpm = 120
 
   private bank: Bank | null = null
   private bankId: string | null = null
@@ -51,6 +56,15 @@ class AudioEngineImpl {
     this.globalFxChain?.rebuild(config)
   }
 
+  /** Rebuilds patch-level LFO rates for any active tempo-synced LFO --
+   * see useGlobalTempo.ts, which calls this whenever the persisted BPM
+   * changes. Safe to call before start()/loadBank() -- just stored for
+   * whichever VoiceManager exists later. */
+  setGlobalTempo(bpm: number): void {
+    this.bpm = bpm
+    this.voiceManager?.setBpm(bpm)
+  }
+
   get isStarted(): boolean {
     return this.started
   }
@@ -80,6 +94,7 @@ class AudioEngineImpl {
         this.masterGain!,
         Tone.getContext().rawContext as unknown as AudioContext,
       )
+      this.voiceManager.setBpm(this.bpm)
     }
   }
 
@@ -103,6 +118,7 @@ class AudioEngineImpl {
         this.masterGain!,
         Tone.getContext().rawContext as unknown as AudioContext,
       )
+      this.voiceManager.setBpm(this.bpm)
       if (this.currentPreset) this.voiceManager.setPreset(this.currentPreset)
     }
     return this.voiceManager

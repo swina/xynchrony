@@ -5,7 +5,7 @@ import * as Tone from 'tone'
 import type { Preset } from './types'
 import { Voice } from './Voice'
 import { EffectChain, blankFxChain } from './effects'
-import { lfoRateToHz, lfoShapeToType } from './lfoMapping'
+import { lfoRateToHz, lfoShapeToType, syncDivisionToHz } from './lfoMapping'
 import { blankLfo } from '../soundDesign/defaults'
 import type { SampleCache } from './SampleCache'
 
@@ -44,6 +44,9 @@ export class VoiceManager {
   private audioContext: AudioContext
   private polyphonyLimit: number
   private pitchBendSemitonesValue = 0
+  // See useGlobalTempo.ts / AudioEngine.setGlobalTempo() -- only consulted
+  // when a patch-level LFO's rateMode is 'sync'.
+  private bpm = 120
 
   constructor(
     bankId: string,
@@ -64,8 +67,13 @@ export class VoiceManager {
     this.fxChain.rebuild(blankFxChain())
     this.fxChain.output.connect(this.destination)
     const defaultLfo = blankLfo()
-    this.patchLfo1 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape) }).start()
-    this.patchLfo2 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape) }).start()
+    // min/max: -1..1 -- Tone.LFO otherwise defaults to a 0..1 UNIPOLAR
+    // output, which would only ever nudge a modulated destination one
+    // direction from its base value instead of sweeping symmetrically
+    // around it (modMatrix.ts's baseFor()/baseValues). See Voice.ts's
+    // per-layer lfo1/lfo2 for the same fix, same reasoning.
+    this.patchLfo1 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape), min: -1, max: 1 }).start()
+    this.patchLfo2 = new Tone.LFO({ frequency: lfoRateToHz(defaultLfo.rate), type: lfoShapeToType(defaultLfo.shape), min: -1, max: 1 }).start()
   }
 
   setPreset(preset: Preset | null): void {
@@ -92,6 +100,14 @@ export class VoiceManager {
     this.applyPatchLfoSettings()
   }
 
+  /** See useGlobalTempo.ts -- called whenever the app-wide BPM changes.
+   * Re-applies immediately so an already-sync'd patch LFO's rate updates
+   * live, same as any other patch-level LFO edit. */
+  setBpm(bpm: number): void {
+    this.bpm = bpm
+    this.applyPatchLfoSettings()
+  }
+
   /** Re-applies the active preset's filter type/cutoff/resonance onto
    * every currently-sounding voice's already-built filter node, live --
    * see Voice.updateFilterLive() for why this doesn't need a
@@ -106,10 +122,15 @@ export class VoiceManager {
   private applyPatchLfoSettings(): void {
     const lfo1 = this.activePreset?.lfo1 ?? blankLfo()
     const lfo2 = this.activePreset?.lfo2 ?? blankLfo()
-    this.patchLfo1.frequency.value = lfoRateToHz(lfo1.rate)
+    this.patchLfo1.frequency.value = this.resolveLfoHz(lfo1)
     this.patchLfo1.type = lfoShapeToType(lfo1.shape)
-    this.patchLfo2.frequency.value = lfoRateToHz(lfo2.rate)
+    this.patchLfo2.frequency.value = this.resolveLfoHz(lfo2)
     this.patchLfo2.type = lfoShapeToType(lfo2.shape)
+  }
+
+  private resolveLfoHz(lfo: { rate: number; rateMode?: 'hz' | 'sync'; syncDivision?: string }): number {
+    if (lfo.rateMode === 'sync' && lfo.syncDivision) return syncDivisionToHz(lfo.syncDivision, this.bpm)
+    return lfoRateToHz(lfo.rate)
   }
 
   private heldNotes = new Set<number>()
@@ -155,6 +176,7 @@ export class VoiceManager {
           getCCSignal: (cc: number) => this.getCCSignal(cc),
           patchLfo1: this.patchLfo1,
           patchLfo2: this.patchLfo2,
+          customMidiSources: preset.customMidiSources ?? [],
           fxChain: this.fxChain,
           // Every voice of the active preset feeds the shared Preset FX
           // chain, not this.destination directly -- see the constructor.

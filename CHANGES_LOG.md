@@ -1,5 +1,100 @@
 # Changes Log
 
+## 2026-08-28 (master)
+
+### FIX
+- **Every live mod-matrix destination silently reset to 0 the instant a
+  cable connected, before `amount` even mattered** -- e.g. LFO 1 -> Amp
+  Volume produced total silence (gain reset to 0, then governed only by a
+  freshly-created cable's default 0% amount); LFO 1 -> Amp Pan looked like
+  "not modulating" (pan reset to 0 = already-centered, so a 0%-amount
+  cable was indistinguishable from doing nothing). Root cause: connecting
+  a `Tone.Scale` to a `Tone.Param` (`scale.connect(targets.outGain.gain)`
+  etc.) calls Tone.js's `connectSignal()` internally
+  (`SignalOperator.prototype.connect`, confirmed in `node_modules/tone`
+  source), which does `cancelScheduledValues(0); setValueAtTime(0, 0)` on
+  the destination -- i.e. resets and overrides, not the plain additive
+  native `AudioNode->AudioParam` summing every routing in `modMatrix.ts`
+  was written assuming. Fix: each live destination's true pre-modulation
+  value is now snapshotted once per voice, before any connection
+  (`Voice.ts`), and folded into that destination's *first* cable's own
+  `Tone.Scale` range (`modMatrix.ts`'s `baseFor()`/`ModMatrixTargets.
+  baseValues`/`basedDestinations` -- only the first cable to a shared
+  destination encodes the baseline, since the AudioParam still sums
+  multiple connected Scales natively). Applies to every live destination
+  (`filterFreq`, `filterQ`, `ampVolume`, `ampPan`, `lfo1Rate`/`lfo2Rate`,
+  `patchLfo1Rate`/`patchLfo2Rate`, `wetDryMix`) -- this was a
+  pre-existing, latent bug in the whole live-modulation mechanism, not
+  specific to the two newest destinations; a `filterEnv -> filterQ` cable
+  (common in imported Orbit-3 data) hit the exact Q=0 self-silencing bug
+  `resonanceToQ()`'s floor was supposed to prevent, just at the connected-
+  AudioParam level instead of the constructed base value.
+- Patch-level LFOs (`patchLfo1`/`patchLfo2`, `VoiceManager.ts`) and
+  per-layer LFOs (`Voice.ts`'s `lfo1`/`lfo2`, resolved as mod-matrix
+  sources `lfo1Bipolar`/`lfo2Bipolar`) were constructed with Tone.LFO's
+  default 0..1 **unipolar** output despite being named/used as bipolar
+  sources -- explicitly set `min: -1, max: 1` now, so a routed LFO sweeps
+  symmetrically around the destination's base value (matches the fix
+  above: `base + depth * lfoValue` now genuinely swings both directions)
+  instead of only ever nudging it one way from a false zero baseline.
+
+### FEATURE
+- Patch-level Modulation (`ModulationEditor.vue`, Performance and Sound
+  Design modes): 9 new destinations -- `ampVolume`/`ampPan` (live,
+  continuous -- target the voice's final Gain/Panner nodes), `sampleStart`
+  and `envAttack`/`envDecay`/`envSustain`/`envRelease` (one-time, baked at
+  note-on -- Tone.js envelope segment times and a Player's start offset
+  aren't live AudioParams, same documented class of gap as the existing
+  `volEnvDecay`). `patchLfo1Rate`/`patchLfo2Rate` replace `lfo1Rate`/
+  `lfo2Rate` in this editor -- those targeted each layer's own per-voice
+  LFO instead of the shared patch LFO the editor's LFO modules represent,
+  a real bug found while building this.
+- LFO Hz/tempo-sync toggle for patch-level LFOs (`Preset.lfo1`/`lfo2`):
+  new `rateMode`/`syncDivision` fields, `core/audio/lfoMapping.ts`'s
+  `syncDivisionToHz()` (1/128 .. 8/1, whole-note-relative). Needs a BPM
+  value the app never had (`TransportBar.vue` was already removed) -- new
+  global BPM field in `TopBar.vue`, persisted via new
+  `composables/useGlobalTempo.ts` (same `localStorage` pattern as
+  `useGlobalFx.ts`), live-applied through `AudioEngine.setGlobalTempo()` /
+  `VoiceManager.setBpm()`.
+- LFO Delay/Variation, previously stored/editable but never applied to
+  playback for patch-level LFOs (per the field's own doc comment), now
+  wired per-voice in `modMatrix.ts`'s `wrapPatchLfoSource()` -- a delay
+  ramp and randomized depth jitter wrapping the *routing* rather than the
+  shared oscillator itself (mutating the oscillator per-note would detune
+  every other held note using the same shared LFO).
+- Custom named MIDI sources (`Preset.customMidiSources`): a small,
+  reusable, user-named CC source catalog cable-able from the Modulation
+  canvas, distinct from the existing anonymous per-cable `midiCC`
+  override.
+- Modulation canvas nodes are draggable (`Preset.modulationLayout`),
+  matching `FxChainEditor.vue`'s existing node-drag pattern.
+- Revised the canvas from "every source/destination always shown" to
+  opt-in: the canvas starts empty, the user adds a node via an
+  "Add Source…"/"Add Destination…" combo (`Preset.modulationNodes`),
+  same interaction shape as `FxChainEditor.vue`'s "Add node" combo.
+  Removing a node cascades to delete any cables that referenced it.
+  Pre-existing saved routings are lazily migrated so they never lose
+  their visible nodes. LFO nodes additionally get FX-node-style chrome:
+  collapsible (default collapsed) and bypassable (`Lfo.bypass`, checked
+  in `modMatrix.ts` -- a bypassed LFO contributes no modulation, silently).
+  Modulation canvas nodes use the new `.sd-node-mod` CSS class instead of
+  `.sd-panel`.
+
+See `docs/plans/Modulation-Plan.md` for the full as-built design.
+
+## 2026-08-27 (master)
+
+### FIX
+- `FilterCurveGraph.vue` `levelAt()`: resonance bump for lowpass/highpass
+  only appeared at resonance > 82 (out of 127) due to `Math.max(0, resonance
+  - PASS_LEVEL)` — changed to `resonance` so the bump scales from 0.
+- Same `PASS_LEVEL`-as-threshold bug on lowshelf/highshelf: `shelfLevel`
+  showed a "cut" at resonance=0 instead of flat (0dB gain). Changed formula
+  to `PASS_LEVEL + (resonance / 127) * 45`.
+- Bandpass/peaking had the same threshold issue with `BASE_LEVEL` — flat
+  line at resonance < 14. Changed to `resonance` directly.
+
 ## 2026-08-26 (master)
 
 ### FEATURE

@@ -4,10 +4,11 @@
 //
 // Chain: Player -> Gain(ampEnv) -> [patch-level Filter, when preset.filter is set and not bypassed] -> Panner -> Gain(output) -> bus
 import * as Tone from 'tone'
-import type { Layer, Zone, Envelope, Preset } from './types'
-import { applyModMatrix } from './modMatrix'
+import type { Layer, Zone, Envelope, Preset, CustomMidiSource } from './types'
+import { applyModMatrix, computeEnvelopeAndStartOverrides } from './modMatrix'
 import { resolveAmpEnvelope } from '../soundDesign/envelopeScope'
 import { lfoRateToHz, lfoShapeToType } from './lfoMapping'
+import { blankLfo } from '../soundDesign/defaults'
 import type { EffectChain } from './effects'
 import type { SampleCache } from './SampleCache'
 
@@ -94,6 +95,19 @@ function toAdsr(env: Envelope) {
   }
 }
 
+// Applies the one-time (baked-at-note-on) envAttack/envDecay/envSustain/
+// envRelease mod-matrix deltas onto an already-computed ADSR, floored at a
+// small positive minimum (Tone.AmplitudeEnvelope rejects 0/negative
+// times) -- see modMatrix.ts's computeEnvelopeAndStartOverrides().
+function applyOneTimeEnvelopeOverrides(adsr: ReturnType<typeof toAdsr>, overrides: { attackDeltaSec: number; decayDeltaSec: number; sustainDeltaNorm: number; releaseDeltaSec: number }) {
+  return {
+    attack: Math.max(0.001, adsr.attack + overrides.attackDeltaSec),
+    decay: Math.max(0.001, adsr.decay + overrides.decayDeltaSec),
+    sustain: Math.min(1, Math.max(0, adsr.sustain + overrides.sustainDeltaNorm)),
+    release: Math.max(0.001, adsr.release + overrides.releaseDeltaSec),
+  }
+}
+
 export interface VoiceOptions {
   bankId: string
   layer: Layer
@@ -117,6 +131,8 @@ export interface VoiceOptions {
   // 'patchLfo2') -- see docs/plans/FX-Modulations.md.
   patchLfo1: Tone.LFO
   patchLfo2: Tone.LFO
+  // Preset.customMidiSources -- see core/audio/modMatrix.ts.
+  customMidiSources: CustomMidiSource[]
   // The active preset's Preset FX chain (core/audio/effects.ts) -- always
   // present. `destination` is already fxChain.input (VoiceManager wires
   // it), threaded separately here only so the Mod Matrix's `wetDryMix`
@@ -170,11 +186,30 @@ export class Voice {
     const {
       layer, preset, zone, note, velocity01, pitchBendSemitones, sampleCache, bankId,
       modWheelSignal, pitchWheelSignal, pressureSignal, getCCSignal, patchLfo1, patchLfo2,
-      fxChain, destination,
+      customMidiSources, fxChain, destination,
     } = this.opts
 
     const buffer = await sampleCache.getDecoded(bankId, zone)
     if (this.disposed) return // released/stolen while the sample was loading
+
+    // Computed once, up front, from whatever routings target the
+    // envAttack/envDecay/envSustain/envRelease/sampleStart destinations --
+    // these bias values baked into the envelope/playback-offset BELOW must
+    // be known before the envelope is constructed / player.start() is
+    // called (Tone.js envelope segment times aren't live AudioParams, and
+    // a Player's start offset can't change after playback begins). Scoped
+    // to the Amp Envelope only (not filterEnv) -- Modulation-Plan.md's
+    // "Envelope Attack/Decay/Sustain/Release" destinations are unqualified,
+    // and the Amp Envelope is the one that's always audible. See
+    // modMatrix.ts's computeEnvelopeAndStartOverrides().
+    const oneTimeCtx = {
+      velocity01, key01: note / 127, modWheelSignal, pitchWheelSignal, pressureSignal, getCCSignal, customSources: customMidiSources,
+    }
+    const oneTimeSlots = [
+      ...(preset.modMatrixBypassed === false ? layer.modMatrix : []),
+      ...(preset.modMatrix ?? []),
+    ]
+    const oneTimeOverrides = computeEnvelopeAndStartOverrides(oneTimeSlots, oneTimeCtx)
 
     this.player = new Tone.Player(new Tone.ToneAudioBuffer(buffer))
     this.player.fadeIn = 0.002
@@ -199,12 +234,12 @@ export class Voice {
     }
 
     this.applyPitch(note, layer.params.transposeSemitones, layer.params.fineTuneCents,
-      zone.rootKey, zone.fineTune, layer.params.nonTranspose, pitchBendSemitones)
+      zone.rootKey, zone.fineTune, layer.params.nonTranspose, pitchBendSemitones, oneTimeOverrides.pitchDeltaSemitones)
 
     // Amp envelope may be this layer's own, or shared via a layer group /
     // the whole patch -- see core/soundDesign/envelopeScope.ts.
     const ampEnvelope = resolveAmpEnvelope(layer, preset)
-    this.ampEnv = new Tone.AmplitudeEnvelope(toAdsr(ampEnvelope))
+    this.ampEnv = new Tone.AmplitudeEnvelope(applyOneTimeEnvelopeOverrides(toAdsr(ampEnvelope), oneTimeOverrides))
 
     // Patch-level filter: one per preset, not per layer (see
     // core/audio/types.ts). Only constructed when it's actually going to be
@@ -235,8 +270,14 @@ export class Voice {
     const volumeDb = zone.volumeDb ?? layer.params.volumeDb
     this.outGain = new Tone.Gain(Tone.dbToGain(volumeDb))
 
-    this.lfo1 = new Tone.LFO({ frequency: lfoRateToHz(layer.lfo1.rate), type: lfoShapeToType(layer.lfo1.shape) })
-    this.lfo2 = new Tone.LFO({ frequency: lfoRateToHz(layer.lfo2.rate), type: lfoShapeToType(layer.lfo2.shape) })
+    // min/max: -1..1 (Tone.LFO otherwise defaults to a 0..1 UNIPOLAR
+    // output) -- this is the only instance mod-matrix's 'lfo1Bipolar'/
+    // 'lfo2Bipolar' source names resolve to (resolveLiveSource() in
+    // modMatrix.ts), so it needs to actually swing symmetrically to match
+    // that name, and to modulate evenly in both directions around
+    // whatever base value a routing centers on (modMatrix.ts's baseFor()).
+    this.lfo1 = new Tone.LFO({ frequency: lfoRateToHz(layer.lfo1.rate), type: lfoShapeToType(layer.lfo1.shape), min: -1, max: 1 })
+    this.lfo2 = new Tone.LFO({ frequency: lfoRateToHz(layer.lfo2.rate), type: lfoShapeToType(layer.lfo2.shape), min: -1, max: 1 })
     this.gateSignal = new Tone.Signal({ value: 1, units: 'normalRange' })
     // Key-synced LFOs reset phase per note (start here, at voice creation);
     // free-running LFOs ideally share one instance per active preset so
@@ -298,6 +339,24 @@ export class Voice {
       isLooping: zone.isLooping, loopStartSec: this.player.loopStart, loopEndSec: this.player.loopEnd,
     })
 
+    const patchLfo1Config = preset.lfo1 ?? blankLfo()
+    const patchLfo2Config = preset.lfo2 ?? blankLfo()
+    // Snapshotted before any modMatrix connection is made below (this is
+    // the earliest point after every relevant node -- filter/panner/
+    // outGain/lfo1/lfo2 -- is constructed) -- see modMatrix.ts's
+    // ModMatrixTargets.baseValues for why this can't just be re-read
+    // on demand later.
+    const baseValues = {
+      filterFreq: this.filter ? Number(this.filter.frequency.value) : 0,
+      filterQ: this.filter ? Number(this.filter.Q.value) : 0,
+      ampVolume: Number(this.outGain.gain.value),
+      ampPan: Number(this.panner.pan.value),
+      lfo1Rate: Number(this.lfo1.frequency.value),
+      lfo2Rate: Number(this.lfo2.frequency.value),
+      patchLfo1Rate: Number(patchLfo1.frequency.value),
+      patchLfo2Rate: Number(patchLfo2.frequency.value),
+      wetDryMix: fxChain.wetDryFade.value,
+    }
     const modMatrixTargets = {
       player: this.player,
       filter: this.filter,
@@ -306,6 +365,17 @@ export class Voice {
       lfo2: this.lfo2,
       patchLfo1,
       patchLfo2,
+      patchLfo1Delay: patchLfo1Config.delay,
+      patchLfo1Variation: patchLfo1Config.variation,
+      patchLfo2Delay: patchLfo2Config.delay,
+      patchLfo2Variation: patchLfo2Config.variation,
+      patchLfo1Bypassed: patchLfo1Config.bypass === true,
+      patchLfo2Bypassed: patchLfo2Config.bypass === true,
+      baseValues,
+      basedDestinations: new Set<string>(),
+      panner: this.panner,
+      outGain: this.outGain,
+      customSources: customMidiSources,
       modWheelSignal,
       pitchWheelSignal,
       pressureSignal,
@@ -316,13 +386,20 @@ export class Voice {
       fxChain,
       disposables: this.disposables,
     }
-    // Layer's own routings, then the patch-level ones (Preset.modMatrix --
-    // see docs/plans/FX-Modulations.md) -- both apply to every voice, on
-    // top of each other, same `disposables` array for cleanup.
-    applyModMatrix(layer.modMatrix, modMatrixTargets)
+    // Layer's own routings only apply when explicitly un-bypassed (default
+    // bypassed -- see Preset.modMatrixBypassed in core/audio/types.ts); the
+    // patch-level ones (Preset.modMatrix) always apply, since those are
+    // never raw/imported data, only ever what a human built through a
+    // Modulation patch editor. Both feed the same `disposables` array.
+    if (preset.modMatrixBypassed === false) applyModMatrix(layer.modMatrix, modMatrixTargets)
     applyModMatrix(preset.modMatrix ?? [], modMatrixTargets)
 
-    this.player.start()
+    // sampleStart (oneTimeOverrides, computed up front -- see above): a
+    // fraction of this buffer's duration, only meaningful now that the
+    // buffer's actual length is known. Player.start()'s offset can't
+    // change after playback begins, so this is baked in here, once.
+    const startOffsetSec = Math.min(buffer.duration, Math.max(0, oneTimeOverrides.sampleStartFrac * buffer.duration))
+    this.player.start(Tone.now(), startOffsetSec)
     this.ampEnv.triggerAttack(Tone.now(), velocity01)
     this.filterEnv?.triggerAttack(Tone.now())
   }
@@ -349,13 +426,18 @@ export class Voice {
 
   // Tone.Player.playbackRate is a plain number setter (not a connectable
   // Tone.Param), so all pitch here is static -- computed once at note-on.
-  // Live pitch modulation from the mod matrix is a documented v1 gap, see
-  // modMatrix.ts.
+  // `pitchModSemitones` is the mod matrix's one-time `pitch` destination
+  // contribution (modMatrix.ts's computeEnvelopeAndStartOverrides()) --
+  // baked in alongside pitch-bend/transpose/fine-tune, same "can't be a
+  // live AudioParam" reasoning. A note already sustaining won't sweep from
+  // a live source targeting `pitch`; it'll pick up a new value on its next
+  // note-on.
   private applyPitch(
     note: number, transposeSemitones: number, layerFineTuneCents: number,
     rootKey: number, zoneFineTune: number, nonTranspose: boolean, pitchBendSemitones: number,
+    pitchModSemitones: number,
   ) {
-    const semitones = nonTranspose ? 0 : (note - rootKey) + transposeSemitones + pitchBendSemitones
+    const semitones = nonTranspose ? 0 : (note - rootKey) + transposeSemitones + pitchBendSemitones + pitchModSemitones
     const zoneFineTuneCents = (zoneFineTune / 64) * 100 // zone.fineTune is 1/64-semitone units
     const totalCents = semitones * 100 + zoneFineTuneCents + layerFineTuneCents
     this.player.playbackRate = 2 ** (totalCents / 1200)

@@ -24,6 +24,19 @@ export const KNOWN_MOD_DESTINATIONS = [
   // core/audio/effects.ts. Sound Design presets only (no effect chain
   // exists for a preset without one).
   'wetDryMix',
+  // Patch-level additions -- docs/plans/Modulation-Plan.md. `ampVolume`
+  // and `ampPan` are genuine live AudioParams (Voice's outGain/panner);
+  // `envAttack`/`envDecay`/`envSustain`/`envRelease`/`sampleStart` are
+  // one-time-at-note-on only (Tone.js envelope segment times and a
+  // Player's start offset aren't live-automatable) -- see modMatrix.ts's
+  // applyOneTimeSource(). `patchLfo1Rate`/`patchLfo2Rate` target the
+  // shared patch-level LFO pair (Preset.lfo1/lfo2), distinct from
+  // `lfo1Rate`/`lfo2Rate` above which target each layer's own per-voice
+  // LFOs -- routing a patch-level cable through the wrong pair was a bug
+  // found during this feature's investigation.
+  'ampVolume', 'ampPan', 'sampleStart',
+  'envAttack', 'envDecay', 'envSustain', 'envRelease',
+  'patchLfo1Rate', 'patchLfo2Rate',
 ] as const
 
 export const LFO_SHAPES = ['triangle', 'sine', 'sawtooth', 'square'] as const

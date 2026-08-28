@@ -5,7 +5,7 @@
 // under the dial to arm learning, twiddle a physical CC knob to bind it,
 // click again to clear. See docs/plans/sound-design-ui.md and
 // useMidiLearn.ts for the binding model.
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useMidiLearn } from '../../composables/useMidiLearn'
 
 const props = withDefaults(defineProps<{
@@ -152,15 +152,29 @@ function toggleLearn() {
   else midiLearn.startLearn(props.learnId)
 }
 
+// Deliberately NOT unregistered on unmount: MIDI Learn should keep working
+// while this dial is off-screen (a different tab/panel, a collapsed FX
+// node, a preset not currently showing) -- matching how MIDI Learn behaves
+// on real hardware/DAWs, and how the user actually expects to use it (set
+// a binding once, keep tweaking it from a hardware controller regardless
+// of which panel happens to be open). The registered closure captures
+// `emit`/`props`, not anything tied to this component instance's mount
+// state, and Vue's emit -> the parent's `v-model` listener -> the
+// underlying reactive object mutation all keep working after unmount, as
+// long as that object itself isn't discarded -- so does the deep watcher
+// in useAudioEngine.ts that pushes the change to the live audio graph.
+// Re-mounting the same learnId (e.g. navigating back) simply overwrites
+// this entry with a fresh callback, so there's never more than one active
+// registration per learnId. The only cost is a registration for a
+// genuinely deleted target (e.g. a removed FX node) lingering harmlessly
+// in the registry for the rest of the session, rather than being cleaned
+// up immediately.
 onMounted(() => {
   if (midiLearn && props.learnId) {
     midiLearn.registerCallback(props.learnId, (value01) => {
       setValue(props.min + value01 * (props.max - props.min))
     })
   }
-})
-onUnmounted(() => {
-  if (midiLearn && props.learnId) midiLearn.unregisterCallback(props.learnId)
 })
 </script>
 

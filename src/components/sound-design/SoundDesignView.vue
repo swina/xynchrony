@@ -148,6 +148,14 @@ watch(activePreset, (preset) => {
           </template>
 
           <template v-else-if="activeTab === 'modmatrix'">
+            <label v-if="activePreset" class="flex items-center gap-2 text-xs sd-panel py-2 mb-2 w-fit">
+              <input
+                :checked="activePreset.modMatrixBypassed === false"
+                type="checkbox"
+                @change="activePreset.modMatrixBypassed = ($event.target as HTMLInputElement).checked ? false : true"
+              />
+              Enable each layer's own Mod Matrix (off by default -- routings parsed from the original bank's hardware data were calibrated for a filter/routing model this app doesn't emulate, and some audibly wreck playback here. Doesn't affect the Patch Mod tab, which is always your own routings.)
+            </label>
             <ModMatrixEditor v-if="selectedLayer" :layer="selectedLayer" />
             <div v-else class="text-sm px-2 py-4" style="color: var(--color-ink-soft)">Select a layer in the Layers tab first.</div>
           </template>
